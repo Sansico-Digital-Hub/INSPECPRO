@@ -24,6 +24,9 @@ class FieldType(str, Enum):
     signature = "signature"
     measurement = "measurement"
     notes = "notes"
+    date = "date"
+    datetime = "datetime"
+    time = "time"
 
 class MeasurementType(str, Enum):
     between = "between"

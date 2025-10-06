@@ -27,6 +27,9 @@ class FieldType(enum.Enum):
     signature = "signature"
     measurement = "measurement"
     notes = "notes"
+    date = "date"
+    datetime = "datetime"
+    time = "time"
 
 class MeasurementType(enum.Enum):
     between = "between"

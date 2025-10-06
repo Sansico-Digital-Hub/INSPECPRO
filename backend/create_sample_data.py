@@ -13,8 +13,8 @@ from auth import get_password_hash
 from models import UserRole, FieldType, InspectionStatus
 
 def create_sample_data():
-    # Create tables
-    Base.metadata.create_all(bind=engine)
+    # Note: Tables already exist in MySQL, no need to create
+    # Base.metadata.create_all(bind=engine)
     
     db = SessionLocal()
     
