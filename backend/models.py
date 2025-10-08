@@ -109,6 +109,7 @@ class Inspection(Base):
     reviewed_by = Column(Integer, ForeignKey("inspecpro_users.id"))
     reviewed_at = Column(DateTime(timezone=True))
     rejection_reason = Column(Text)
+    reviewer_signature = Column(Text)  # Base64 encoded signature image
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     

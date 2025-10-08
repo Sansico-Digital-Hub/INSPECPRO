@@ -157,6 +157,7 @@ class InspectionCreate(InspectionBase):
 class InspectionUpdate(BaseModel):
     status: Optional[InspectionStatus] = None
     rejection_reason: Optional[str] = None
+    reviewer_signature: Optional[str] = None
 
 class InspectionResponse(InspectionBase):
     id: int
@@ -165,6 +166,7 @@ class InspectionResponse(InspectionBase):
     reviewed_by: Optional[int] = None
     reviewed_at: Optional[datetime] = None
     rejection_reason: Optional[str] = None
+    reviewer_signature: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     responses: List[InspectionResponseResponse] = []
