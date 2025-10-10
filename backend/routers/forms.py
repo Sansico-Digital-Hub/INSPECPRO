@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from database import get_db
-from models import User, Form, FormField
+from models import User, Form, FormField, InspectionResponse
 from schemas import FormCreate, FormUpdate, FormResponse, FormFieldCreate
 from auth import get_current_user, require_role
 
@@ -59,7 +59,9 @@ async def create_form(
             form_id=db_form.id,
             field_name=field_data.field_name,
             field_type=field_data.field_type,
+            field_types=field_data.field_types,
             field_options=field_data.field_options,
+            placeholder_text=field_data.placeholder_text,
             measurement_type=field_data.measurement_type,
             measurement_min=field_data.measurement_min,
             measurement_max=field_data.measurement_max,
@@ -194,23 +196,60 @@ async def update_form_complete(
     form.form_name = form_data.form_name
     form.description = form_data.description
     
-    # Delete existing fields
-    db.query(FormField).filter(FormField.form_id == form_id).delete()
+    # Get existing fields
+    existing_fields = db.query(FormField).filter(FormField.form_id == form_id).all()
+    existing_field_ids = {field.id for field in existing_fields}
     
-    # Add new fields
+    # Track which fields are in the update
+    updated_field_ids = set()
+    
+    # Update or create fields
     for field_data in form_data.fields:
-        db_field = FormField(
-            form_id=form_id,
-            field_name=field_data.field_name,
-            field_type=field_data.field_type,
-            field_options=field_data.field_options,
-            measurement_type=field_data.measurement_type,
-            measurement_min=field_data.measurement_min,
-            measurement_max=field_data.measurement_max,
-            is_required=field_data.is_required,
-            field_order=field_data.field_order
-        )
-        db.add(db_field)
+        if hasattr(field_data, 'id') and field_data.id and field_data.id in existing_field_ids:
+            # Update existing field
+            db_field = db.query(FormField).filter(FormField.id == field_data.id).first()
+            if db_field:
+                db_field.field_name = field_data.field_name
+                db_field.field_type = field_data.field_type
+                db_field.field_types = field_data.field_types
+                db_field.field_options = field_data.field_options
+                db_field.placeholder_text = field_data.placeholder_text
+                db_field.measurement_type = field_data.measurement_type
+                db_field.measurement_min = field_data.measurement_min
+                db_field.measurement_max = field_data.measurement_max
+                db_field.is_required = field_data.is_required
+                db_field.field_order = field_data.field_order
+                updated_field_ids.add(field_data.id)
+        else:
+            # Create new field
+            db_field = FormField(
+                form_id=form_id,
+                field_name=field_data.field_name,
+                field_type=field_data.field_type,
+                field_types=field_data.field_types,
+                field_options=field_data.field_options,
+                placeholder_text=field_data.placeholder_text,
+                measurement_type=field_data.measurement_type,
+                measurement_min=field_data.measurement_min,
+                measurement_max=field_data.measurement_max,
+                is_required=field_data.is_required,
+                field_order=field_data.field_order
+            )
+            db.add(db_field)
+    
+    # Delete fields that are no longer in the form (only if they have no responses)
+    for field_id in existing_field_ids - updated_field_ids:
+        field_to_delete = db.query(FormField).filter(FormField.id == field_id).first()
+        if field_to_delete:
+            # Check if field has any responses
+            response_count = db.query(InspectionResponse).filter(
+                InspectionResponse.field_id == field_id
+            ).count()
+            
+            if response_count == 0:
+                # Safe to delete - no responses reference this field
+                db.delete(field_to_delete)
+            # If there are responses, keep the field (don't delete)
     
     db.commit()
     db.refresh(form)

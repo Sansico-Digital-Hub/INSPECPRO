@@ -89,7 +89,9 @@ class PasswordResetConfirm(BaseModel):
 class FormFieldBase(BaseModel):
     field_name: str
     field_type: FieldType
+    field_types: Optional[List[FieldType]] = None  # Multiple field types support
     field_options: Optional[Dict[str, Any]] = None
+    placeholder_text: Optional[str] = None  # For notes/instructions
     measurement_type: Optional[MeasurementType] = None
     measurement_min: Optional[float] = None
     measurement_max: Optional[float] = None
@@ -97,7 +99,7 @@ class FormFieldBase(BaseModel):
     field_order: int
 
 class FormFieldCreate(FormFieldBase):
-    pass
+    id: Optional[int] = None  # Optional ID for updates
 
 class FormFieldResponse(FormFieldBase):
     id: int

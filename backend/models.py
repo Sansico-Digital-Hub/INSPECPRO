@@ -86,7 +86,9 @@ class FormField(Base):
     form_id = Column(Integer, ForeignKey("forms.id"), nullable=False)
     field_name = Column(String(255), nullable=False)
     field_type = Column(Enum(FieldType), nullable=False)
+    field_types = Column(JSON)  # Multiple field types support
     field_options = Column(JSON)
+    placeholder_text = Column(Text)  # For notes/instructions
     measurement_type = Column(Enum(MeasurementType))
     measurement_min = Column(DECIMAL(10, 2))
     measurement_max = Column(DECIMAL(10, 2))
