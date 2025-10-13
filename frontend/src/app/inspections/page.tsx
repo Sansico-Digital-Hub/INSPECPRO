@@ -4,13 +4,17 @@ import { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { inspectionsAPI } from '@/lib/api';
 import { Inspection, InspectionStatus, UserRole } from '@/types';
-import { PlusIcon, EyeIcon, PencilIcon, TrashIcon, CheckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, EyeIcon, PencilIcon, TrashIcon, CheckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowDownTrayIcon, DocumentArrowDownIcon, CalendarIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import Sidebar from '@/components/Sidebar';
 import { useSidebar } from '@/contexts/SidebarContext';
 import LayoutWrapper from '@/components/LayoutWrapper';
 import SignatureCanvas from 'react-signature-canvas';
 import Link from 'next/link';
+import ReactDatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+
+const DatePicker = ReactDatePicker as any;
 
 function InspectionsContent() {
   const { user, logout } = useAuth();
@@ -22,6 +26,9 @@ function InspectionsContent() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showRejectModal, setShowRejectModal] = useState<number | null>(null);
   const [showAcceptModal, setShowAcceptModal] = useState<number | null>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [startDate, setStartDate] = useState<Date | null>(null);
+  const [endDate, setEndDate] = useState<Date | null>(null);
 
   useEffect(() => {
     fetchInspections();
@@ -96,6 +103,34 @@ function InspectionsContent() {
     }
   };
 
+  const handleExportExcel = async () => {
+    try {
+      toast.loading('Generating Excel file...', { id: 'excel-export' });
+      
+      const params: any = {};
+      
+      if (startDate) {
+        params.start_date = startDate.toISOString().split('T')[0];
+      }
+      
+      if (endDate) {
+        params.end_date = endDate.toISOString().split('T')[0];
+      }
+      
+      if (statusFilter !== 'all') {
+        params.status_filter = statusFilter;
+      }
+      
+      await inspectionsAPI.exportToExcel(params);
+      toast.success('Excel file exported successfully', { id: 'excel-export' });
+      setShowExportModal(false);
+    } catch (error: any) {
+      console.error('Failed to export Excel:', error);
+      const errorMessage = error.response?.data?.detail || 'Failed to export Excel file';
+      toast.error(errorMessage, { id: 'excel-export' });
+    }
+  };
+
   const getStatusColor = (status: InspectionStatus) => {
     switch (status) {
       case InspectionStatus.DRAFT:
@@ -111,7 +146,7 @@ function InspectionsContent() {
     }
   };
 
-  const canReview = user?.role === UserRole.SUPERVISOR || user?.role === UserRole.MANAGEMENT || user?.role === UserRole.ADMIN;
+  const canReview = user?.role === UserRole.SUPERVISOR || user?.role === UserRole.ADMIN;
   const canEdit = user?.role === UserRole.ADMIN;
   const canDelete = user?.role === UserRole.ADMIN;
 
@@ -125,15 +160,24 @@ function InspectionsContent() {
             <h2 className="text-2xl font-bold text-gray-900">
               {user?.role === UserRole.USER ? 'My Inspections' : 'All Inspections'}
             </h2>
-            {user?.role === UserRole.USER && (
-              <Link
-                href="/inspections/new"
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowExportModal(true)}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
               >
-                <PlusIcon className="h-5 w-5 mr-2" />
-                New Inspection
-              </Link>
-            )}
+                <DocumentArrowDownIcon className="h-5 w-5 mr-2" />
+                Export to Excel
+              </button>
+              {user?.role === UserRole.USER && (
+                <Link
+                  href="/inspections/new"
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+                >
+                  <PlusIcon className="h-5 w-5 mr-2" />
+                  New Inspection
+                </Link>
+              )}
+            </div>
           </div>
 
           {/* Search and Filters */}
@@ -320,6 +364,19 @@ function InspectionsContent() {
           }}
         />
       )}
+
+      {showExportModal && (
+        <ExportExcelModal
+          onClose={() => setShowExportModal(false)}
+          onExport={handleExportExcel}
+          startDate={startDate}
+          endDate={endDate}
+          setStartDate={setStartDate}
+          setEndDate={setEndDate}
+          statusFilter={statusFilter}
+          setStatusFilter={setStatusFilter}
+        />
+      )}
     </>
   );
 }
@@ -406,6 +463,117 @@ function AcceptModal({
               </button>
             </div>
           </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExportExcelModal({
+  onClose,
+  onExport,
+  startDate,
+  endDate,
+  setStartDate,
+  setEndDate,
+  statusFilter,
+  setStatusFilter
+}: {
+  onClose: () => void;
+  onExport: () => void;
+  startDate: Date | null;
+  endDate: Date | null;
+  setStartDate: (date: Date | null) => void;
+  setEndDate: (date: Date | null) => void;
+  statusFilter: InspectionStatus | 'all';
+  setStatusFilter: (status: InspectionStatus | 'all') => void;
+}) {
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+      <div className="relative top-20 mx-auto p-5 border w-[600px] shadow-lg rounded-md bg-white">
+        <div className="mt-3">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Export Inspections to Excel</h3>
+          <div className="space-y-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+              <p className="text-sm text-blue-800">
+                Select date range and filters to export inspection data to Excel format.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-900 mb-2">
+                  <CalendarIcon className="h-4 w-4 inline mr-1" />
+                  Start Date
+                </label>
+                <DatePicker
+                  selected={startDate}
+                  onChange={(date: Date | null) => setStartDate(date)}
+                  selectsStart
+                  startDate={startDate}
+                  endDate={endDate}
+                  dateFormat="yyyy-MM-dd"
+                  placeholderText="Select start date"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                  isClearable
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-900 mb-2">
+                  <CalendarIcon className="h-4 w-4 inline mr-1" />
+                  End Date
+                </label>
+                <DatePicker
+                  selected={endDate}
+                  onChange={(date: Date | null) => setEndDate(date)}
+                  selectsEnd
+                  startDate={startDate}
+                  endDate={endDate}
+                  minDate={startDate}
+                  dateFormat="yyyy-MM-dd"
+                  placeholderText="Select end date"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                  isClearable
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-900 mb-2">
+                Status Filter
+              </label>
+              <select
+                className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as InspectionStatus | 'all')}
+              >
+                <option value="all">All Status</option>
+                <option value={InspectionStatus.DRAFT}>Draft</option>
+                <option value={InspectionStatus.SUBMITTED}>Submitted</option>
+                <option value={InspectionStatus.ACCEPTED}>Accepted</option>
+                <option value={InspectionStatus.REJECTED}>Rejected</option>
+              </select>
+            </div>
+
+            <div className="flex justify-end space-x-3 pt-4">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-sm font-medium text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-md"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={onExport}
+                className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md"
+              >
+                <DocumentArrowDownIcon className="h-5 w-5 inline mr-2" />
+                Export to Excel
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

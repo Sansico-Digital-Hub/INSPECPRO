@@ -25,6 +25,42 @@ export default function EditInspectionPage() {
     fetchInspectionDetails();
   }, [inspectionId]);
 
+  // Helper function to initialize responses for all fields including conditional ones
+  const initializeFieldResponses = (
+    field: FormField,
+    initialResponses: Record<string, InspectionResponse>,
+    existingResponses: InspectionResponse[]
+  ) => {
+    if (field.id) {
+      const fieldTypes = (field.field_types && field.field_types.length > 0) 
+        ? field.field_types 
+        : [field.field_type];
+      
+      fieldTypes.forEach((fieldType) => {
+        const responseKey = fieldTypes.length > 1 ? `${field.id}-${fieldType}` : `${field.id}`;
+        const existingResponse = existingResponses.find(r => r.field_id === field.id);
+        
+        initialResponses[responseKey] = existingResponse || {
+          field_id: field.id!,
+          response_value: '',
+          measurement_value: undefined,
+          pass_hold_status: undefined
+        };
+      });
+    }
+    
+    // Recursively initialize conditional fields
+    if (field.has_conditional && field.conditional_rules) {
+      field.conditional_rules.forEach(rule => {
+        if (rule.next_fields && rule.next_fields.length > 0) {
+          rule.next_fields.forEach(conditionalField => {
+            initializeFieldResponses(conditionalField, initialResponses, existingResponses);
+          });
+        }
+      });
+    }
+  };
+
   const fetchInspectionDetails = async () => {
     try {
       const inspectionData = await inspectionsAPI.getInspection(inspectionId);
@@ -33,26 +69,10 @@ export default function EditInspectionPage() {
       const formData = await formsAPI.getForm(inspectionData.form_id);
       setForm(formData);
 
-      // Initialize responses from existing inspection data
+      // Initialize responses from existing inspection data including conditional fields
       const initialResponses: Record<string, InspectionResponse> = {};
       formData.fields.forEach(field => {
-        if (field.id) {
-          const fieldTypes = (field.field_types && field.field_types.length > 0) 
-            ? field.field_types 
-            : [field.field_type];
-          
-          fieldTypes.forEach((fieldType) => {
-            const responseKey = fieldTypes.length > 1 ? `${field.id}-${fieldType}` : `${field.id}`;
-            const existingResponse = inspectionData.responses.find(r => r.field_id === field.id);
-            
-            initialResponses[responseKey] = existingResponse || {
-              field_id: field.id!,
-              response_value: '',
-              measurement_value: undefined,
-              pass_hold_status: undefined
-            };
-          });
-        }
+        initializeFieldResponses(field, initialResponses, inspectionData.responses);
       });
       setResponses(initialResponses);
     } catch (error) {
@@ -217,6 +237,15 @@ function MultiTypeFieldRenderer({
     ? field.field_types 
     : [field.field_type];
   
+  // Get the current response value to check conditional logic
+  const mainResponseKey = fieldTypes.length > 1 ? `${field.id}-${fieldTypes[0]}` : `${field.id}`;
+  const currentValue = responses[mainResponseKey]?.response_value || '';
+  
+  // Find matching conditional rule
+  const matchingRule = field.has_conditional && field.conditional_rules
+    ? field.conditional_rules.find(rule => rule.condition_value === currentValue)
+    : null;
+  
   return (
     <div className="border-b border-gray-200 pb-6">
       <label className="block text-sm font-medium text-gray-900 mb-2">
@@ -253,6 +282,23 @@ function MultiTypeFieldRenderer({
           );
         })}
       </div>
+      
+      {/* Render conditional fields recursively */}
+      {matchingRule && matchingRule.next_fields && matchingRule.next_fields.length > 0 && (
+        <div className="ml-6 mt-4 pl-4 border-l-2 border-blue-300 space-y-4">
+          <div className="text-xs font-semibold text-blue-600 mb-2">
+            ↳ Conditional Fields (when "{currentValue}"):
+          </div>
+          {matchingRule.next_fields.map((conditionalField, idx) => (
+            <MultiTypeFieldRenderer
+              key={`conditional-${field.id}-${conditionalField.field_name}-${idx}`}
+              field={conditionalField}
+              responses={responses}
+              updateResponse={updateResponse}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

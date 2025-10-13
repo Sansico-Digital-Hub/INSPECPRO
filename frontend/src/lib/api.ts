@@ -146,7 +146,7 @@ export const inspectionsAPI = {
   },
 
   exportToPDF: async (id: number): Promise<void> => {
-    const response = await api.get(`/api/inspections/${id}/export/pdf`, {
+    const response = await api.get(`/api/inspections/${id}/export-pdf`, {
       responseType: 'blob',
     });
     
@@ -154,6 +154,27 @@ export const inspectionsAPI = {
     const link = document.createElement('a');
     link.href = url;
     link.setAttribute('download', `inspection_${id}.pdf`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  },
+
+  exportToExcel: async (params?: {
+    start_date?: string;
+    end_date?: string;
+    form_id?: number;
+    status_filter?: InspectionStatus;
+  }): Promise<void> => {
+    const response = await api.get('/api/inspections/export-excel', {
+      params,
+      responseType: 'blob',
+    });
+    
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    link.setAttribute('download', `inspections_export_${timestamp}.xlsx`);
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -171,7 +192,7 @@ export const dashboardAPI = {
 // Analytics APIs
 export const analyticsAPI = {
   getAnalytics: async (): Promise<AnalyticsResponse> => {
-    const response = await api.get<AnalyticsResponse>('/api/analytics/');
+    const response = await api.get<AnalyticsResponse>('/api/dashboard/analytics');
     return response.data;
   },
 };

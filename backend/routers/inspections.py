@@ -13,10 +13,28 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 from io import BytesIO
 import base64
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 from database import get_db
-from models import User, Inspection, InspectionResponse, InspectionFile, Form, FormField
-from schemas import InspectionCreate, InspectionUpdate, InspectionResponse as InspectionResponseSchema, InspectionStatus
+from models import (
+    User,
+    Inspection,
+    InspectionResponse,
+    InspectionFile,
+    Form,
+    FormField,
+    InspectionStatus as ModelInspectionStatus,
+    PassHoldStatus as ModelPassHoldStatus,
+)
+from schemas import (
+    InspectionCreate,
+    InspectionUpdate,
+    InspectionResponse as InspectionResponseSchema,
+    InspectionStatus as SchemaInspectionStatus,
+    PassHoldStatus as SchemaPassHoldStatus,
+)
 from auth import get_current_user, require_role
 
 router = APIRouter()
@@ -25,7 +43,7 @@ router = APIRouter()
 async def get_inspections(
     skip: int = 0,
     limit: int = 100,
-    status_filter: Optional[InspectionStatus] = None,
+    status_filter: Optional[SchemaInspectionStatus] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -41,7 +59,8 @@ async def get_inspections(
         pass
     
     if status_filter:
-        query = query.filter(Inspection.status == status_filter)
+        status_filter_enum = ModelInspectionStatus(status_filter.value)
+        query = query.filter(Inspection.status == status_filter_enum)
     
     inspections = query.offset(skip).limit(limit).all()
     return inspections
@@ -102,7 +121,7 @@ async def create_inspection(
     db_inspection = Inspection(
         form_id=inspection.form_id,
         inspector_id=current_user.id,
-        status=InspectionStatus.draft
+        status=ModelInspectionStatus.draft
     )
     
     db.add(db_inspection)
@@ -111,12 +130,20 @@ async def create_inspection(
     
     # Create responses
     for response_data in inspection.responses:
+        pass_hold_status = None
+        if response_data.pass_hold_status:
+            pass_hold_status = ModelPassHoldStatus(
+                response_data.pass_hold_status.value
+                if isinstance(response_data.pass_hold_status, SchemaPassHoldStatus)
+                else response_data.pass_hold_status
+            )
+
         db_response = InspectionResponse(
             inspection_id=db_inspection.id,
             field_id=response_data.field_id,
             response_value=response_data.response_value,
             measurement_value=response_data.measurement_value,
-            pass_hold_status=response_data.pass_hold_status
+            pass_hold_status=pass_hold_status
         )
         db.add(db_response)
     
@@ -146,10 +173,10 @@ async def update_inspection(
         can_edit = True
     elif current_user.role.value == "user" and inspection.inspector_id == current_user.id:
         # Users can only edit their own draft inspections
-        can_edit = inspection.status == InspectionStatus.draft
-    elif current_user.role.value in ["supervisor", "management"]:
-        # Supervisors and management can review submitted inspections
-        can_edit = inspection.status == InspectionStatus.submitted
+        can_edit = inspection.status == ModelInspectionStatus.draft
+    elif current_user.role.value == "supervisor":
+        # Supervisors can review submitted inspections
+        can_edit = inspection.status == ModelInspectionStatus.submitted
     
     if not can_edit:
         raise HTTPException(
@@ -159,11 +186,19 @@ async def update_inspection(
     
     # Update inspection
     update_data = inspection_update.dict(exclude_unset=True)
+
+    status_value = update_data.pop("status", None)
+    status_enum = None
+    if status_value is not None:
+        status_enum = ModelInspectionStatus(
+            status_value.value if isinstance(status_value, SchemaInspectionStatus) else status_value
+        )
+        inspection.status = status_enum
+
     for field, value in update_data.items():
         setattr(inspection, field, value)
-    
-    # If status is being changed to accepted/rejected, set reviewer info
-    if inspection_update.status in [InspectionStatus.accepted, InspectionStatus.rejected]:
+
+    if status_enum in (ModelInspectionStatus.accepted, ModelInspectionStatus.rejected):
         inspection.reviewed_by = current_user.id
         inspection.reviewed_at = datetime.utcnow()
     
@@ -194,13 +229,13 @@ async def submit_inspection(
             detail="Not enough permissions"
         )
     
-    if inspection.status != InspectionStatus.draft:
+    if inspection.status != ModelInspectionStatus.draft:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only draft inspections can be submitted"
         )
-    
-    inspection.status = InspectionStatus.submitted
+
+    inspection.status = ModelInspectionStatus.submitted
     db.commit()
     
     return {"message": "Inspection submitted successfully"}
@@ -225,7 +260,7 @@ async def delete_inspection(
         can_delete = True
     elif (current_user.role.value == "user" and 
           inspection.inspector_id == current_user.id and 
-          inspection.status == InspectionStatus.draft):
+          inspection.status == ModelInspectionStatus.draft):
         can_delete = True
     
     if not can_delete:
@@ -507,4 +542,207 @@ async def export_inspection_to_pdf(
         media_type='application/pdf',
         filename=pdf_filename,
         headers={"Content-Disposition": f"attachment; filename={pdf_filename}"}
+    )
+
+@router.get("/export-excel")
+async def export_inspections_to_excel(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    form_id: Optional[int] = None,
+    status_filter: Optional[SchemaInspectionStatus] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Export inspections to Excel with date filtering"""
+    # Build query
+    query = db.query(Inspection)
+    
+    # Filter based on user role
+    if current_user.role.value == "user":
+        query = query.filter(Inspection.inspector_id == current_user.id)
+    
+    # Apply filters
+    if start_date:
+        try:
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            query = query.filter(Inspection.created_at >= start_dt)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid start_date format. Use YYYY-MM-DD"
+            )
+    
+    if end_date:
+        try:
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            # Add one day to include the entire end date
+            from datetime import timedelta
+            end_dt = end_dt + timedelta(days=1)
+            query = query.filter(Inspection.created_at < end_dt)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid end_date format. Use YYYY-MM-DD"
+            )
+    
+    if form_id:
+        query = query.filter(Inspection.form_id == form_id)
+    
+    if status_filter:
+        status_filter_enum = ModelInspectionStatus(status_filter.value)
+        query = query.filter(Inspection.status == status_filter_enum)
+    
+    inspections = query.all()
+    
+    if not inspections:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No inspections found with the specified filters"
+        )
+    
+    # Create Excel workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Inspections"
+    
+    # Define styles
+    header_font = Font(bold=True, color="FFFFFF", size=12)
+    header_fill = PatternFill(start_color="1E40AF", end_color="1E40AF", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    
+    cell_alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    # Get all unique form fields from the inspections
+    form_fields_map = {}
+    for inspection in inspections:
+        form = db.query(Form).filter(Form.id == inspection.form_id).first()
+        if form and form.id not in form_fields_map:
+            form_fields_map[form.id] = {
+                'name': form.form_name,
+                'fields': sorted(form.fields, key=lambda f: f.field_order)
+            }
+    
+    # Create header row
+    headers = [
+        "Inspection ID",
+        "Form Name",
+        "Inspector",
+        "Status",
+        "Created Date",
+        "Updated Date",
+        "Reviewed By",
+        "Reviewed Date",
+        "Rejection Reason"
+    ]
+    
+    # Add dynamic field headers (collect all unique fields)
+    all_fields = []
+    field_ids_seen = set()
+    for form_data in form_fields_map.values():
+        for field in form_data['fields']:
+            if field.id not in field_ids_seen:
+                all_fields.append(field)
+                field_ids_seen.add(field.id)
+                headers.append(f"{field.field_name} ({field.field_type})")
+    
+    # Write headers
+    for col_num, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_num, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = border
+    
+    # Write data rows
+    row_num = 2
+    for inspection in inspections:
+        form = db.query(Form).filter(Form.id == inspection.form_id).first()
+        inspector = db.query(User).filter(User.id == inspection.inspector_id).first()
+        reviewer = None
+        if inspection.reviewed_by:
+            reviewer = db.query(User).filter(User.id == inspection.reviewed_by).first()
+        
+        # Basic inspection info
+        row_data = [
+            inspection.id,
+            form.form_name if form else "N/A",
+            inspector.username if inspector else "N/A",
+            inspection.status.value.upper(),
+            inspection.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            inspection.updated_at.strftime('%Y-%m-%d %H:%M:%S'),
+            reviewer.username if reviewer else "",
+            inspection.reviewed_at.strftime('%Y-%m-%d %H:%M:%S') if inspection.reviewed_at else "",
+            inspection.rejection_reason or ""
+        ]
+        
+        # Get responses mapped by field_id
+        responses_map = {resp.field_id: resp for resp in inspection.responses}
+        
+        # Add field responses
+        for field in all_fields:
+            field_response = responses_map.get(field.id)
+            cell_value = ""
+            
+            if field_response:
+                if field_response.response_value:
+                    if field.field_type == 'signature':
+                        cell_value = "[Digital Signature]"
+                    elif field.field_type == 'photo':
+                        cell_value = f"[Photo: {field_response.response_value}]"
+                    else:
+                        cell_value = str(field_response.response_value)
+                
+                if field_response.measurement_value is not None:
+                    cell_value = str(field_response.measurement_value)
+                    if field.field_options and 'unit' in field.field_options:
+                        cell_value += f" {field.field_options['unit']}"
+                
+                if field_response.pass_hold_status:
+                    status_text = field_response.pass_hold_status.value.upper()
+                    cell_value += f" [{status_text}]" if cell_value else f"[{status_text}]"
+            else:
+                cell_value = "—"
+            
+            row_data.append(cell_value)
+        
+        # Write row
+        for col_num, value in enumerate(row_data, 1):
+            cell = ws.cell(row=row_num, column=col_num, value=value)
+            cell.alignment = cell_alignment
+            cell.border = border
+        
+        row_num += 1
+    
+    # Auto-adjust column widths
+    for col_num in range(1, len(headers) + 1):
+        column_letter = get_column_letter(col_num)
+        max_length = 0
+        for cell in ws[column_letter]:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
+        ws.column_dimensions[column_letter].width = adjusted_width
+    
+    # Save to file
+    excel_filename = f"inspections_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    excel_path = os.path.join("uploads", excel_filename)
+    os.makedirs("uploads", exist_ok=True)
+    
+    wb.save(excel_path)
+    
+    # Return the Excel file
+    return FileResponse(
+        excel_path,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        filename=excel_filename,
+        headers={"Content-Disposition": f"attachment; filename={excel_filename}"}
     )

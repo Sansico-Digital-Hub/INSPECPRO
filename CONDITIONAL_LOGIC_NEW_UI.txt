@@ -1,0 +1,224 @@
+NEW CONDITIONAL LOGIC UI CODE TO REPLACE LINES 1183-1567:
+
+                          {field.has_conditional && field.conditional_rules && field.conditional_rules.length > 0 && (
+                            <div className="space-y-4">
+                              {field.conditional_rules.map((rule: any, ruleIndex: number) => (
+                                <div key={ruleIndex} className="bg-gray-50 p-4 rounded border border-gray-300">
+                                  {/* Condition Header */}
+                                  <div className="grid grid-cols-2 gap-3 mb-3">
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-900 mb-1">When Value Equals</label>
+                                      <select
+                                        className="w-full text-xs border border-gray-300 rounded px-2 py-1 text-gray-900"
+                                        value={rule.condition_value || ''}
+                                        onChange={(e) => {
+                                          const rules = [...(field.conditional_rules || [])];
+                                          rules[ruleIndex] = { ...rules[ruleIndex], condition_value: e.target.value };
+                                          updateField(index, { conditional_rules: rules });
+                                        }}
+                                      >
+                                        <option value="">Select value...</option>
+                                        {(field.field_options?.options || []).map((opt: string, optIdx: number) => (
+                                          <option key={optIdx} value={opt}>{opt}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                    <div className="flex items-end">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const rules = (field.conditional_rules || []).filter((_: any, i: number) => i !== ruleIndex);
+                                          updateField(index, { 
+                                            conditional_rules: rules,
+                                            has_conditional: rules.length > 0
+                                          });
+                                        }}
+                                        className="w-full px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded border border-red-300"
+                                      >
+                                        🗑️ Delete
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Fields List */}
+                                  <div className="mt-3 space-y-2">
+                                    <div className="flex items-center justify-between">
+                                      <label className="block text-xs font-medium text-blue-900">
+                                        📋 Fields to show (when "{rule.condition_value || 'this value'}"):
+                                      </label>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const rules = [...(field.conditional_rules || [])];
+                                          const nextFields = rules[ruleIndex].next_fields || [];
+                                          rules[ruleIndex] = {
+                                            ...rules[ruleIndex],
+                                            next_fields: [...nextFields, {
+                                              field_name: '',
+                                              field_type: FieldType.TEXT,
+                                              field_types: [],
+                                              field_options: {},
+                                              is_required: false,
+                                              field_order: nextFields.length
+                                            }]
+                                          };
+                                          updateField(index, { conditional_rules: rules });
+                                        }}
+                                        className="text-xs px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"
+                                      >
+                                        + Add Field
+                                      </button>
+                                    </div>
+
+                                    {rule.next_fields && rule.next_fields.length > 0 ? (
+                                      <div className="space-y-3 pl-4 border-l-2 border-blue-300">
+                                        {rule.next_fields.map((nextField: any, fieldIndex: number) => (
+                                          <div key={fieldIndex} className="bg-white p-3 rounded border border-gray-200">
+                                            <div className="grid grid-cols-2 gap-2 mb-2">
+                                              <div>
+                                                <label className="block text-xs font-medium text-gray-900 mb-1">Field Name</label>
+                                                <input
+                                                  type="text"
+                                                  className="w-full text-xs border border-gray-300 rounded px-2 py-1 text-gray-900"
+                                                  placeholder="Enter field name"
+                                                  value={nextField.field_name || ''}
+                                                  onChange={(e) => {
+                                                    const rules = [...(field.conditional_rules || [])];
+                                                    const fields = [...rules[ruleIndex].next_fields];
+                                                    fields[fieldIndex] = { ...fields[fieldIndex], field_name: e.target.value };
+                                                    rules[ruleIndex] = { ...rules[ruleIndex], next_fields: fields };
+                                                    updateField(index, { conditional_rules: rules });
+                                                  }}
+                                                />
+                                              </div>
+                                              <div className="flex items-end">
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    const rules = [...(field.conditional_rules || [])];
+                                                    const fields = rules[ruleIndex].next_fields.filter((_: any, i: number) => i !== fieldIndex);
+                                                    rules[ruleIndex] = { ...rules[ruleIndex], next_fields: fields };
+                                                    updateField(index, { conditional_rules: rules });
+                                                  }}
+                                                  className="w-full px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded border border-red-300"
+                                                >
+                                                  🗑️ Delete
+                                                </button>
+                                              </div>
+                                            </div>
+
+                                            {/* Field Types */}
+                                            <div>
+                                              <label className="block text-xs font-medium text-gray-900 mb-1">Field Types</label>
+                                              <div className="grid grid-cols-4 gap-2 p-2 border border-gray-300 rounded bg-gray-50">
+                                                {[
+                                                  { value: FieldType.TEXT, label: 'Text' },
+                                                  { value: FieldType.DROPDOWN, label: 'Dropdown' },
+                                                  { value: FieldType.SEARCH_DROPDOWN, label: 'Search Dropdown' },
+                                                  { value: FieldType.BUTTON, label: 'Button' },
+                                                  { value: FieldType.PHOTO, label: 'Photo' },
+                                                  { value: FieldType.SIGNATURE, label: 'Signature' },
+                                                  { value: FieldType.MEASUREMENT, label: 'Measurement' },
+                                                  { value: FieldType.NOTES, label: 'Notes' },
+                                                  { value: FieldType.DATE, label: 'Date' },
+                                                  { value: FieldType.DATETIME, label: 'Date & Time' },
+                                                  { value: FieldType.TIME, label: 'Time' },
+                                                ].map((type) => (
+                                                  <label key={type.value} className="flex items-center space-x-1 text-xs text-gray-900">
+                                                    <input
+                                                      type="checkbox"
+                                                      className="h-3 w-3 text-blue-600 border-gray-300 rounded"
+                                                      checked={(nextField.field_types || []).includes(type.value)}
+                                                      onChange={(e) => {
+                                                        const rules = [...(field.conditional_rules || [])];
+                                                        const fields = [...rules[ruleIndex].next_fields];
+                                                        const current = fields[fieldIndex].field_types || [];
+                                                        const next = e.target.checked
+                                                          ? [...current, type.value]
+                                                          : current.filter((t: any) => t !== type.value);
+                                                        fields[fieldIndex] = { ...fields[fieldIndex], field_types: next, field_type: next[0] || FieldType.TEXT };
+                                                        rules[ruleIndex] = { ...rules[ruleIndex], next_fields: fields };
+                                                        updateField(index, { conditional_rules: rules });
+                                                      }}
+                                                    />
+                                                    <span className="text-[10px]">{type.label}</span>
+                                                  </label>
+                                                ))}
+                                              </div>
+                                            </div>
+
+                                            {/* Required Checkbox */}
+                                            <div className="mt-2">
+                                              <label className="flex items-center space-x-2 text-xs text-gray-900">
+                                                <input
+                                                  type="checkbox"
+                                                  className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                                                  checked={nextField.is_required || false}
+                                                  onChange={(e) => {
+                                                    const rules = [...(field.conditional_rules || [])];
+                                                    const fields = [...rules[ruleIndex].next_fields];
+                                                    fields[fieldIndex] = { ...fields[fieldIndex], is_required: e.target.checked };
+                                                    rules[ruleIndex] = { ...rules[ruleIndex], next_fields: fields };
+                                                    updateField(index, { conditional_rules: rules });
+                                                  }}
+                                                />
+                                                <span>Required field</span>
+                                              </label>
+                                            </div>
+
+                                            {/* Dropdown Options */}
+                                            {((nextField.field_types || []).includes(FieldType.DROPDOWN) || (nextField.field_types || []).includes(FieldType.SEARCH_DROPDOWN)) && (
+                                              <div className="mt-2">
+                                                <label className="block text-xs font-medium text-gray-900 mb-1">Dropdown Options (comma-separated)</label>
+                                                <input
+                                                  type="text"
+                                                  className="w-full text-xs border border-gray-300 rounded px-2 py-1 text-gray-900"
+                                                  placeholder="Option 1, Option 2, Option 3"
+                                                  value={((nextField.field_options?.options || []) as string[]).join(', ')}
+                                                  onChange={(e) => {
+                                                    const rules = [...(field.conditional_rules || [])];
+                                                    const fields = [...rules[ruleIndex].next_fields];
+                                                    const options = e.target.value.split(',').map(o => o.trim()).filter(Boolean);
+                                                    fields[fieldIndex] = { 
+                                                      ...fields[fieldIndex], 
+                                                      field_options: { ...fields[fieldIndex].field_options, options } 
+                                                    };
+                                                    rules[ruleIndex] = { ...rules[ruleIndex], next_fields: fields };
+                                                    updateField(index, { conditional_rules: rules });
+                                                  }}
+                                                />
+                                              </div>
+                                            )}
+
+                                            {/* Placeholder Text */}
+                                            <div className="mt-2">
+                                              <label className="block text-xs font-medium text-gray-900 mb-1">Placeholder/Instructions</label>
+                                              <input
+                                                type="text"
+                                                className="w-full text-xs border border-gray-300 rounded px-2 py-1 text-gray-900"
+                                                placeholder="Enter placeholder text or instructions"
+                                                value={nextField.placeholder_text || ''}
+                                                onChange={(e) => {
+                                                  const rules = [...(field.conditional_rules || [])];
+                                                  const fields = [...rules[ruleIndex].next_fields];
+                                                  fields[fieldIndex] = { ...fields[fieldIndex], placeholder_text: e.target.value };
+                                                  rules[ruleIndex] = { ...rules[ruleIndex], next_fields: fields };
+                                                  updateField(index, { conditional_rules: rules });
+                                                }}
+                                              />
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <p className="text-xs text-gray-500 italic pl-4">No fields added yet. Click "+ Add Field" to add fields that will show when this condition is met.</p>
+                                    )}
+                                  </div>
+
+                                  <p className="text-xs text-gray-700 mt-3 italic">
+                                    💡 This field will only show when conditions are met
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
