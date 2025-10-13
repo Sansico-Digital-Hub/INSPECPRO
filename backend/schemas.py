@@ -134,7 +134,7 @@ class FormResponse(FormBase):
 
 # Inspection Schemas
 class InspectionResponseBase(BaseModel):
-    field_id: int
+    field_id: Optional[int] = None  # Allow null for conditional fields without database ID
     response_value: Optional[str] = None
     measurement_value: Optional[float] = None
     pass_hold_status: Optional[PassHoldStatus] = None

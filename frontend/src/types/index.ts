@@ -97,7 +97,7 @@ export interface Form {
 export interface InspectionResponse {
   id?: number;
   inspection_id?: number;
-  field_id: number;
+  field_id: number | null;  // Allow null for conditional fields without database ID
   response_value?: string;
   measurement_value?: number;
   pass_hold_status?: PassHoldStatus;

@@ -130,6 +130,12 @@ async def create_inspection(
     
     # Create responses
     for response_data in inspection.responses:
+        # Skip responses without field_id (conditional fields)
+        # These will be handled separately or stored as metadata
+        if response_data.field_id is None:
+            print(f"⚠️ Skipping response without field_id: {response_data.response_value}")
+            continue
+            
         pass_hold_status = None
         if response_data.pass_hold_status:
             pass_hold_status = ModelPassHoldStatus(
@@ -549,7 +555,7 @@ async def export_inspections_to_excel(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     form_id: Optional[int] = None,
-    status_filter: Optional[SchemaInspectionStatus] = None,
+    status_filter: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -589,8 +595,14 @@ async def export_inspections_to_excel(
         query = query.filter(Inspection.form_id == form_id)
     
     if status_filter:
-        status_filter_enum = ModelInspectionStatus(status_filter.value)
-        query = query.filter(Inspection.status == status_filter_enum)
+        try:
+            status_filter_enum = ModelInspectionStatus(status_filter)
+            query = query.filter(Inspection.status == status_filter_enum)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status_filter. Must be one of: {', '.join([s.value for s in ModelInspectionStatus])}"
+            )
     
     inspections = query.all()
     

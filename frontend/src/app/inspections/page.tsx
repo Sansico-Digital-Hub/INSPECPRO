@@ -502,7 +502,7 @@ function ExportExcelModal({
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-900 mb-2">
+                <label className="block text-sm font-medium text-black mb-2">
                   <CalendarIcon className="h-4 w-4 inline mr-1" />
                   Start Date
                 </label>
@@ -520,7 +520,7 @@ function ExportExcelModal({
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-900 mb-2">
+                <label className="block text-sm font-medium text-black mb-2">
                   <CalendarIcon className="h-4 w-4 inline mr-1" />
                   End Date
                 </label>
@@ -540,7 +540,7 @@ function ExportExcelModal({
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">
+              <label className="block text-sm font-medium text-black mb-2">
                 Status Filter
               </label>
               <select

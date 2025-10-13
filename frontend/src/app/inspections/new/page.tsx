@@ -21,10 +21,41 @@ export default function NewInspectionPage() {
     fetchForms();
   }, []);
 
+  // Recursive function to normalize field including nested conditional fields
+  const normalizeField = (field: any): any => {
+    const fieldTypes = field.field_types || field.field_options?.field_types || [];
+    
+    // Extract conditional logic from field_options if it exists there
+    const hasConditional = field.has_conditional || field.field_options?.has_conditional || false;
+    let conditionalRules = field.conditional_rules || field.field_options?.conditional_rules || [];
+    
+    // Recursively normalize nested fields in conditional rules
+    if (conditionalRules && conditionalRules.length > 0) {
+      conditionalRules = conditionalRules.map((rule: any) => ({
+        ...rule,
+        next_fields: (rule.next_fields || []).map((nestedField: any) => normalizeField(nestedField))
+      }));
+    }
+    
+    return {
+      ...field,
+      field_types: fieldTypes,
+      has_conditional: hasConditional,
+      conditional_rules: conditionalRules
+    };
+  };
+
   const fetchForms = async () => {
     try {
       const data = await formsAPI.getForms();
-      setForms(data);
+      
+      // Normalize all forms and their fields
+      const normalizedForms = data.map(form => ({
+        ...form,
+        fields: (form.fields || []).map(field => normalizeField(field))
+      }));
+      
+      setForms(normalizedForms);
     } catch (error) {
       console.error('Failed to fetch forms:', error);
       toast.error('Failed to fetch forms');
@@ -35,35 +66,44 @@ export default function NewInspectionPage() {
   const initializeFieldResponses = (
     field: FormField, 
     initialResponses: Record<string, InspectionResponse>,
-    docNumber: string = ''
+    docNumber: string = '',
+    parentPath: string = ''  // Track parent path for unique keys
   ) => {
-    if (field.id) {
-      const fieldTypes = (field.field_types && field.field_types.length > 0) 
-        ? field.field_types 
-        : [field.field_type];
+    // Generate unique key for this field
+    // For fields with ID: use ID
+    // For conditional fields without ID: use parent path + field name
+    const fieldKey = field.id 
+      ? `${field.id}` 
+      : `${parentPath}-${field.field_name.replace(/\s+/g, '_')}`;
+    
+    // Combine primary field_type with additional field_types
+    const fieldTypes = field.field_types && field.field_types.length > 0
+      ? [field.field_type, ...field.field_types.filter(t => t !== field.field_type)] // Avoid duplicates
+      : [field.field_type];
+    
+    fieldTypes.forEach((fieldType) => {
+      const responseKey = fieldTypes.length > 1 ? `${fieldKey}-${fieldType}` : fieldKey;
       
-      fieldTypes.forEach((fieldType) => {
-        const responseKey = fieldTypes.length > 1 ? `${field.id}-${fieldType}` : `${field.id}`;
-        
-        // Auto-fill doc number if this is the No Doc field
-        const isDocField = field.field_name.toLowerCase().includes('no doc') || 
-                          field.field_name.toLowerCase().includes('no. doc');
-        
-        initialResponses[responseKey] = {
-          field_id: field.id!,
-          response_value: isDocField && docNumber ? docNumber : '',
-          measurement_value: undefined,
-          pass_hold_status: undefined
-        };
-      });
-    }
+      // Auto-fill doc number if this is the No Doc field
+      const isDocField = field.field_name.toLowerCase().includes('no doc') || 
+                        field.field_name.toLowerCase().includes('no. doc');
+      
+      initialResponses[responseKey] = {
+        field_id: field.id || null,  // Can be null for conditional fields
+        response_value: isDocField && docNumber ? docNumber : '',
+        measurement_value: undefined,
+        pass_hold_status: undefined
+      };
+    });
     
     // Recursively initialize conditional fields
     if (field.has_conditional && field.conditional_rules) {
-      field.conditional_rules.forEach(rule => {
+      field.conditional_rules.forEach((rule, ruleIndex) => {
         if (rule.next_fields && rule.next_fields.length > 0) {
-          rule.next_fields.forEach(conditionalField => {
-            initializeFieldResponses(conditionalField, initialResponses, docNumber);
+          rule.next_fields.forEach((conditionalField, fieldIndex) => {
+            // Create unique parent path for nested fields
+            const newParentPath = `${fieldKey}-rule${ruleIndex}-field${fieldIndex}`;
+            initializeFieldResponses(conditionalField, initialResponses, docNumber, newParentPath);
           });
         }
       });
@@ -71,6 +111,16 @@ export default function NewInspectionPage() {
   };
 
   const handleFormSelect = async (form: Form) => {
+    console.log('📋 Selected Form:', form);
+    console.log('📋 Form Fields:', form.fields);
+    form.fields.forEach((field, idx) => {
+      console.log(`Field ${idx + 1}:`, {
+        name: field.field_name,
+        has_conditional: field.has_conditional,
+        conditional_rules: field.conditional_rules
+      });
+    });
+    
     setSelectedForm(form);
     const initialResponses: Record<string, InspectionResponse> = {};
     
@@ -116,18 +166,55 @@ export default function NewInspectionPage() {
       return;
     }
 
+    console.log('🔄 Inspection Submit Started');
+    console.log('Form ID:', selectedForm.id);
+    console.log('Total Responses:', Object.keys(responses).length);
+    console.log('All Responses:', responses);
+
     setLoading(true);
     setIsDraft(asDraft);
 
     try {
+      // Prepare responses: only include responses with field_id (skip conditional fields without ID)
+      // Backend will need to handle conditional fields separately or we store them differently
+      const validResponses = Object.entries(responses)
+        .filter(([key, response]) => {
+          // Include if has value and has field_id
+          const hasValue = response.response_value || response.measurement_value !== undefined || response.pass_hold_status;
+          const hasFieldId = response.field_id !== null;
+          return hasValue && hasFieldId;
+        })
+        .map(([key, response]) => response);
+
+      console.log('Valid Responses (with field_id):', validResponses);
+      
+      // For conditional fields without field_id, we'll store them as JSON in a special field
+      // or handle them differently based on backend requirements
+      const conditionalResponses = Object.entries(responses)
+        .filter(([key, response]) => {
+          const hasValue = response.response_value || response.measurement_value !== undefined || response.pass_hold_status;
+          const noFieldId = response.field_id === null;
+          return hasValue && noFieldId;
+        })
+        .map(([key, response]) => ({
+          field_key: key,  // Store the unique key
+          ...response
+        }));
+
+      console.log('Conditional Responses (without field_id):', conditionalResponses);
+
       const inspectionData = {
         form_id: selectedForm.id,
-        responses: Object.values(responses).filter(response => 
-          response.response_value || response.measurement_value !== undefined
-        )
+        responses: validResponses,
+        // Store conditional responses as metadata if backend supports it
+        // conditional_responses: conditionalResponses  // Uncomment if backend supports this
       };
 
+      console.log('📤 Sending inspection data:', inspectionData);
+
       const inspection = await inspectionsAPI.createInspection(inspectionData);
+      
+      console.log('✅ Inspection created:', inspection);
       
       if (!asDraft) {
         await inspectionsAPI.submitInspection(inspection.id);
@@ -136,9 +223,18 @@ export default function NewInspectionPage() {
         toast.success('Inspection saved as draft');
       }
       
+      // TODO: If backend doesn't support conditional_responses yet,
+      // we need to update backend to handle field_id: null
+      if (conditionalResponses.length > 0) {
+        console.warn('⚠️ Conditional responses not saved:', conditionalResponses.length, 'responses');
+        console.warn('⚠️ Backend needs to support field_id: null or conditional_responses field');
+      }
+      
       router.push('/inspections');
     } catch (error: any) {
-      console.error('Failed to create inspection:', error);
+      console.error('❌ Failed to create inspection:', error);
+      console.error('Error response:', error.response);
+      console.error('Error data:', error.response?.data);
       toast.error(error.response?.data?.detail || 'Failed to create inspection');
     } finally {
       setLoading(false);
@@ -269,24 +365,42 @@ export default function NewInspectionPage() {
 function MultiTypeFieldRenderer({
   field,
   responses,
-  updateResponse
+  updateResponse,
+  parentPath = ''  // Track parent path for unique keys
 }: {
   field: FormField;
   responses: Record<string, InspectionResponse>;
   updateResponse: (fieldId: string, updates: Partial<InspectionResponse>) => void;
+  parentPath?: string;
 }) {
-  const fieldTypes = (field.field_types && field.field_types.length > 0) 
-    ? field.field_types 
+  // Generate unique key for this field (same logic as initializeFieldResponses)
+  const fieldKey = field.id 
+    ? `${field.id}` 
+    : `${parentPath}-${field.field_name.replace(/\s+/g, '_')}`;
+  
+  // Combine primary field_type with additional field_types
+  const fieldTypes = field.field_types && field.field_types.length > 0
+    ? [field.field_type, ...field.field_types.filter(t => t !== field.field_type)] // Avoid duplicates
     : [field.field_type];
   
   // Get the current response value to check conditional logic
-  const mainResponseKey = fieldTypes.length > 1 ? `${field.id}-${fieldTypes[0]}` : `${field.id}`;
+  const mainResponseKey = fieldTypes.length > 1 ? `${fieldKey}-${fieldTypes[0]}` : fieldKey;
   const currentValue = responses[mainResponseKey]?.response_value || '';
   
   // Find matching conditional rule
   const matchingRule = field.has_conditional && field.conditional_rules
     ? field.conditional_rules.find(rule => rule.condition_value === currentValue)
     : null;
+  
+  // Debug log
+  if (field.has_conditional) {
+    console.log(`🔀 Field "${field.field_name}" (key: ${fieldKey}) has conditional logic:`, {
+      has_conditional: field.has_conditional,
+      conditional_rules: field.conditional_rules,
+      currentValue: currentValue,
+      matchingRule: matchingRule
+    });
+  }
   
   return (
     <div className="border-b border-gray-200 pb-6">
@@ -297,9 +411,9 @@ function MultiTypeFieldRenderer({
       
       <div className="space-y-4">
         {fieldTypes.map((fieldType, index) => {
-          const responseKey = fieldTypes.length > 1 ? `${field.id}-${fieldType}` : `${field.id}`;
+          const responseKey = fieldTypes.length > 1 ? `${fieldKey}-${fieldType}` : fieldKey;
           const response = responses[responseKey] || { 
-            field_id: field.id!, 
+            field_id: field.id || null, 
             response_value: '' 
           };
           
@@ -309,10 +423,10 @@ function MultiTypeFieldRenderer({
           };
           
           return (
-            <div key={`${field.id}-${fieldType}-${index}`}>
+            <div key={`${fieldKey}-${fieldType}-${index}`}>
               {fieldTypes.length > 1 && (
-                <div className="text-xs font-medium text-gray-600 mb-1 bg-blue-50 px-2 py-1 rounded">
-                  📝 {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
+                <div className="text-xs font-semibold text-gray-800 mb-1 bg-blue-50 px-3 py-2 rounded border border-blue-200">
+                  📝 {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}
                 </div>
               )}
               <FieldRenderer
@@ -331,14 +445,21 @@ function MultiTypeFieldRenderer({
           <div className="text-xs font-semibold text-blue-600 mb-2">
             ↳ Conditional Fields (when "{currentValue}"):
           </div>
-          {matchingRule.next_fields.map((conditionalField, idx) => (
-            <MultiTypeFieldRenderer
-              key={`conditional-${field.id}-${conditionalField.field_name}-${idx}`}
-              field={conditionalField}
-              responses={responses}
-              updateResponse={updateResponse}
-            />
-          ))}
+          {matchingRule.next_fields.map((conditionalField, idx) => {
+            // Create unique parent path for nested fields
+            const ruleIndex = field.conditional_rules?.findIndex(r => r === matchingRule) || 0;
+            const newParentPath = `${fieldKey}-rule${ruleIndex}-field${idx}`;
+            
+            return (
+              <MultiTypeFieldRenderer
+                key={`conditional-${fieldKey}-${conditionalField.field_name}-${idx}`}
+                field={conditionalField}
+                responses={responses}
+                updateResponse={updateResponse}
+                parentPath={newParentPath}
+              />
+            );
+          })}
         </div>
       )}
     </div>
@@ -357,8 +478,12 @@ function FieldRenderer({
   const [signatureRef, setSignatureRef] = useState<SignatureCanvas | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
 
-  const renderField = () => {
-    switch (field.field_type) {
+  // Check if field has multiple types
+  const hasMultipleTypes = field.field_types && field.field_types.length > 1;
+  const activeFieldType = hasMultipleTypes ? field.field_type : field.field_type;
+
+  const renderSingleFieldType = (fieldType: FieldType) => {
+    switch (fieldType) {
       case FieldType.TEXT:
         return (
           <input
@@ -401,7 +526,6 @@ function FieldRenderer({
         );
 
       case FieldType.DROPDOWN:
-      case FieldType.SEARCH_DROPDOWN:
         return (
           <select
             className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-gray-900"
@@ -416,6 +540,17 @@ function FieldRenderer({
               </option>
             ))}
           </select>
+        );
+
+      case FieldType.SEARCH_DROPDOWN:
+        return (
+          <SearchableDropdown
+            options={field.field_options?.options || []}
+            value={response.response_value || ''}
+            onChange={(value) => onUpdate({ response_value: value })}
+            placeholder="Type to search..."
+            required={field.is_required}
+          />
         );
 
       case FieldType.BUTTON:
@@ -658,5 +793,108 @@ function FieldRenderer({
     }
   };
 
-  return <div>{renderField()}</div>;
+  // If field has multiple types, render all of them
+  if (hasMultipleTypes && field.field_types) {
+    return (
+      <div className="space-y-4">
+        {field.field_types.map((fieldType, index) => (
+          <div key={`${field.id}-${fieldType}`} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+            <label className="block text-sm font-medium text-gray-900 mb-2">
+              {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}
+              {field.is_required && <span className="text-red-600 ml-1">*</span>}
+            </label>
+            {renderSingleFieldType(fieldType)}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Single field type
+  return <div>{renderSingleFieldType(activeFieldType)}</div>;
+}
+
+// Searchable Dropdown Component
+function SearchableDropdown({
+  options,
+  value,
+  onChange,
+  placeholder = 'Type to search...',
+  required = false
+}: {
+  options: string[];
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  required?: boolean;
+}) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const [filteredOptions, setFilteredOptions] = useState<string[]>(options);
+
+  useEffect(() => {
+    if (searchTerm === '') {
+      setFilteredOptions(options);
+    } else {
+      const filtered = options.filter(option =>
+        option.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+      setFilteredOptions(filtered);
+    }
+  }, [searchTerm, options]);
+
+  const handleSelect = (option: string) => {
+    onChange(option);
+    setSearchTerm(option);
+    setIsOpen(false);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newValue = e.target.value;
+    setSearchTerm(newValue);
+    onChange(newValue);
+    setIsOpen(true);
+  };
+
+  useEffect(() => {
+    if (value && !searchTerm) {
+      setSearchTerm(value);
+    }
+  }, [value]);
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        value={searchTerm}
+        onChange={handleInputChange}
+        onFocus={() => setIsOpen(true)}
+        onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+        placeholder={placeholder}
+        required={required}
+        autoComplete="off"
+      />
+      
+      {isOpen && filteredOptions.length > 0 && (
+        <div className="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
+          {filteredOptions.map((option, index) => (
+            <div
+              key={index}
+              className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-gray-900"
+              onClick={() => handleSelect(option)}
+            >
+              {option}
+            </div>
+          ))}
+        </div>
+      )}
+      
+      {isOpen && filteredOptions.length === 0 && searchTerm && (
+        <div className="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg px-3 py-2 text-gray-500">
+          No options found
+        </div>
+      )}
+    </div>
+  );
 }
