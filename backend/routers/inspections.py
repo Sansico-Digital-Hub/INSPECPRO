@@ -130,19 +130,25 @@ async def create_inspection(
     
     # Create responses
     for response_data in inspection.responses:
-        # Skip responses without field_id (conditional fields)
-        # These will be handled separately or stored as metadata
+        # Handle conditional fields (field_id can be None)
         if response_data.field_id is None:
-            print(f"⚠️ Skipping response without field_id: {response_data.response_value}")
-            continue
+            print(f"📝 Saving conditional field response: {response_data.response_value}")
+        else:
+            print(f"📝 Saving field response for field_id {response_data.field_id}: {response_data.response_value}")
             
+        # Normalize pass_hold_status to raw string value
         pass_hold_status = None
-        if response_data.pass_hold_status:
-            pass_hold_status = ModelPassHoldStatus(
-                response_data.pass_hold_status.value
-                if isinstance(response_data.pass_hold_status, SchemaPassHoldStatus)
-                else response_data.pass_hold_status
-            )
+        if response_data.pass_hold_status is not None:
+            if isinstance(response_data.pass_hold_status, SchemaPassHoldStatus):
+                raw_value = response_data.pass_hold_status.value
+            elif isinstance(response_data.pass_hold_status, ModelPassHoldStatus):
+                raw_value = response_data.pass_hold_status.value
+            else:
+                raw_value = str(response_data.pass_hold_status)
+            
+            # Ensure we store the actual string value
+            if raw_value in ["pass", "hold"]:
+                pass_hold_status = raw_value
 
         db_response = InspectionResponse(
             inspection_id=db_inspection.id,

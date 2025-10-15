@@ -36,8 +36,8 @@ class MeasurementType(enum.Enum):
     higher = "higher"
     lower = "lower"
 
-class PassHoldStatus(enum.Enum):
-    pass_status = "pass"
+class PassHoldStatus(str, enum.Enum):
+    pass_value = "pass"
     hold = "hold"
 
 class FileType(enum.Enum):
@@ -127,10 +127,10 @@ class InspectionResponse(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     inspection_id = Column(Integer, ForeignKey("inspections.id"), nullable=False)
-    field_id = Column(Integer, ForeignKey("form_fields.id"), nullable=False)
+    field_id = Column(Integer, ForeignKey("form_fields.id"), nullable=True)  # Allow NULL for conditional fields
     response_value = Column(Text)
     measurement_value = Column(DECIMAL(10, 2))
-    pass_hold_status = Column(Enum(PassHoldStatus))
+    pass_hold_status = Column(String(10))  # Store as string: 'pass' or 'hold'
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships
