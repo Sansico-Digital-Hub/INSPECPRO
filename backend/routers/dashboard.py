@@ -43,8 +43,8 @@ async def get_analytics(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get analytics data (Management and Admin roles)"""
-    if current_user.role.value not in ["management", "admin"]:
+    """Get analytics data (Supervisor, Management and Admin roles)"""
+    if current_user.role.value not in ["supervisor", "management", "admin"]:
         return AnalyticsResponse(
             daily_inspections=[],
             monthly_inspections=[],

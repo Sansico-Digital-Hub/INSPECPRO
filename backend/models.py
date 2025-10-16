@@ -27,14 +27,18 @@ class FieldType(enum.Enum):
     signature = "signature"
     measurement = "measurement"
     notes = "notes"
+    date = "date"
+    datetime = "datetime"
+    time = "time"
+    subform = "subform"
 
 class MeasurementType(enum.Enum):
     between = "between"
     higher = "higher"
     lower = "lower"
 
-class PassHoldStatus(enum.Enum):
-    pass_status = "pass"
+class PassHoldStatus(str, enum.Enum):
+    pass_value = "pass"
     hold = "hold"
 
 class FileType(enum.Enum):
@@ -83,12 +87,15 @@ class FormField(Base):
     form_id = Column(Integer, ForeignKey("forms.id"), nullable=False)
     field_name = Column(String(255), nullable=False)
     field_type = Column(Enum(FieldType), nullable=False)
+    field_types = Column(JSON)  # Multiple field types support
     field_options = Column(JSON)
+    placeholder_text = Column(Text)  # For notes/instructions
     measurement_type = Column(Enum(MeasurementType))
     measurement_min = Column(DECIMAL(10, 2))
     measurement_max = Column(DECIMAL(10, 2))
     is_required = Column(Boolean, default=False)
     field_order = Column(Integer, nullable=False)
+    flag_conditions = Column(JSON)  # Flag condition settings for abnormal data detection
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships
@@ -106,6 +113,7 @@ class Inspection(Base):
     reviewed_by = Column(Integer, ForeignKey("inspecpro_users.id"))
     reviewed_at = Column(DateTime(timezone=True))
     rejection_reason = Column(Text)
+    reviewer_signature = Column(Text)  # Base64 encoded signature image
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
@@ -121,10 +129,11 @@ class InspectionResponse(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     inspection_id = Column(Integer, ForeignKey("inspections.id"), nullable=False)
-    field_id = Column(Integer, ForeignKey("form_fields.id"), nullable=False)
+    field_id = Column(Integer, ForeignKey("form_fields.id"), nullable=True)  # Allow NULL for conditional fields
     response_value = Column(Text)
     measurement_value = Column(DECIMAL(10, 2))
-    pass_hold_status = Column(Enum(PassHoldStatus))
+    pass_hold_status = Column(String(10))  # Store as string: 'pass' or 'hold'
+    is_flagged = Column(Boolean, default=False)  # Flag for abnormal data detection
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships

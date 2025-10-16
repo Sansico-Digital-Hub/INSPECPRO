@@ -24,6 +24,10 @@ class FieldType(str, Enum):
     signature = "signature"
     measurement = "measurement"
     notes = "notes"
+    date = "date"
+    datetime = "datetime"
+    time = "time"
+    subform = "subform"
 
 class MeasurementType(str, Enum):
     between = "between"
@@ -86,15 +90,18 @@ class PasswordResetConfirm(BaseModel):
 class FormFieldBase(BaseModel):
     field_name: str
     field_type: FieldType
+    field_types: Optional[List[FieldType]] = None  # Multiple field types support
     field_options: Optional[Dict[str, Any]] = None
+    placeholder_text: Optional[str] = None  # For notes/instructions
     measurement_type: Optional[MeasurementType] = None
     measurement_min: Optional[float] = None
     measurement_max: Optional[float] = None
     is_required: bool = False
     field_order: int
+    flag_conditions: Optional[Dict[str, Any]] = None  # Flag condition settings for abnormal data detection
 
 class FormFieldCreate(FormFieldBase):
-    pass
+    id: Optional[int] = None  # Optional ID for updates
 
 class FormFieldResponse(FormFieldBase):
     id: int
@@ -129,10 +136,11 @@ class FormResponse(FormBase):
 
 # Inspection Schemas
 class InspectionResponseBase(BaseModel):
-    field_id: int
+    field_id: Optional[int] = None  # Allow null for conditional fields without database ID
     response_value: Optional[str] = None
     measurement_value: Optional[float] = None
     pass_hold_status: Optional[PassHoldStatus] = None
+    is_flagged: Optional[bool] = False  # Flag for abnormal data detection
 
 class InspectionResponseCreate(InspectionResponseBase):
     pass
@@ -154,6 +162,8 @@ class InspectionCreate(InspectionBase):
 class InspectionUpdate(BaseModel):
     status: Optional[InspectionStatus] = None
     rejection_reason: Optional[str] = None
+    reviewer_signature: Optional[str] = None
+    responses: Optional[List[InspectionResponseCreate]] = None
 
 class InspectionResponse(InspectionBase):
     id: int
@@ -162,6 +172,7 @@ class InspectionResponse(InspectionBase):
     reviewed_by: Optional[int] = None
     reviewed_at: Optional[datetime] = None
     rejection_reason: Optional[str] = None
+    reviewer_signature: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     responses: List[InspectionResponseResponse] = []

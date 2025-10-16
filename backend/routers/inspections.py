@@ -1,22 +1,54 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import uuid
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+from reportlab.lib.utils import ImageReader
+from io import BytesIO
+import base64
+from PIL import Image as PILImage
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 from database import get_db
-from models import User, Inspection, InspectionResponse, InspectionFile, Form
-from schemas import InspectionCreate, InspectionUpdate, InspectionResponse as InspectionResponseSchema, InspectionStatus
+from models import (
+    User,
+    Inspection,
+    InspectionResponse,
+    InspectionFile,
+    Form,
+    FormField,
+    InspectionStatus as ModelInspectionStatus,
+    PassHoldStatus as ModelPassHoldStatus,
+)
+from schemas import (
+    InspectionCreate,
+    InspectionUpdate,
+    InspectionResponse as InspectionResponseSchema,
+    InspectionStatus as SchemaInspectionStatus,
+    PassHoldStatus as SchemaPassHoldStatus,
+)
 from auth import get_current_user, require_role
+from utils.flag_evaluator import evaluate_flag_conditions
+from utils.logging_config import get_logger, log_file_upload_event
 
+logger = get_logger(__name__)
 router = APIRouter()
 
 @router.get("/", response_model=List[InspectionResponseSchema])
 async def get_inspections(
     skip: int = 0,
     limit: int = 100,
-    status_filter: Optional[InspectionStatus] = None,
+    status_filter: Optional[SchemaInspectionStatus] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -32,7 +64,8 @@ async def get_inspections(
         pass
     
     if status_filter:
-        query = query.filter(Inspection.status == status_filter)
+        status_filter_enum = ModelInspectionStatus(status_filter.value)
+        query = query.filter(Inspection.status == status_filter_enum)
     
     inspections = query.offset(skip).limit(limit).all()
     return inspections
@@ -49,6 +82,458 @@ async def get_my_inspections(
         Inspection.inspector_id == current_user.id
     ).offset(skip).limit(limit).all()
     return inspections
+
+@router.get("/export-excel")
+async def export_inspections_to_excel(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    form_id: Optional[int] = None,
+    status_filter: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Export inspections to Excel with date filtering"""
+    # Build query
+    query = db.query(Inspection)
+    
+    # Filter based on user role
+    if current_user.role.value == "user":
+        query = query.filter(Inspection.inspector_id == current_user.id)
+    
+    # Apply filters
+    if start_date:
+        try:
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            query = query.filter(Inspection.created_at >= start_dt)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid start_date format. Use YYYY-MM-DD"
+            )
+    
+    if end_date:
+        try:
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            # Add one day to include the entire end date
+            end_dt = end_dt + timedelta(days=1)
+            query = query.filter(Inspection.created_at < end_dt)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid end_date format. Use YYYY-MM-DD"
+            )
+    
+    if form_id:
+        query = query.filter(Inspection.form_id == form_id)
+    
+    if status_filter:
+        try:
+            status_filter_enum = ModelInspectionStatus(status_filter)
+            query = query.filter(Inspection.status == status_filter_enum)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status_filter. Must be one of: {', '.join([s.value for s in ModelInspectionStatus])}"
+            )
+    
+    inspections = query.all()
+    
+    if not inspections:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No inspections found with the specified filters"
+        )
+    
+    # Create Enhanced Excel workbook with multiple sheets
+    wb = Workbook()
+    
+    # Remove default sheet and create custom sheets
+    wb.remove(wb.active)
+    
+    # Create Summary Sheet
+    summary_ws = wb.create_sheet("📊 Summary")
+    
+    # Create Detailed Data Sheet
+    detail_ws = wb.create_sheet("📋 Detailed Data")
+    
+    # Create Forms Overview Sheet
+    forms_ws = wb.create_sheet("📝 Forms Overview")
+    
+    # Define enhanced styles
+    # Header styles with gradient effect
+    header_font = Font(bold=True, color="FFFFFF", size=12, name="Calibri")
+    header_fill = PatternFill(start_color="1E40AF", end_color="3B82F6", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    
+    # Subheader styles
+    subheader_font = Font(bold=True, color="1E40AF", size=11, name="Calibri")
+    subheader_fill = PatternFill(start_color="E0E7FF", end_color="E0E7FF", fill_type="solid")
+    subheader_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    
+    # Data cell styles
+    cell_alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    cell_font = Font(name="Calibri", size=10)
+    
+    # Status-specific styles
+    pass_fill = PatternFill(start_color="D1FAE5", end_color="D1FAE5", fill_type="solid")
+    hold_fill = PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid")
+    pending_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")
+    
+    # Enhanced borders
+    thin_border = Border(
+        left=Side(style='thin', color="D1D5DB"),
+        right=Side(style='thin', color="D1D5DB"),
+        top=Side(style='thin', color="D1D5DB"),
+        bottom=Side(style='thin', color="D1D5DB")
+    )
+    
+    thick_border = Border(
+        left=Side(style='medium', color="1E40AF"),
+        right=Side(style='medium', color="1E40AF"),
+        top=Side(style='medium', color="1E40AF"),
+        bottom=Side(style='medium', color="1E40AF")
+    )
+    
+    # === POPULATE SUMMARY SHEET ===
+    # Summary sheet title
+    summary_ws['A1'] = "📊 INSPECTION EXPORT SUMMARY"
+    summary_ws['A1'].font = Font(name='Calibri', size=16, bold=True, color='1E40AF')
+    summary_ws.merge_cells('A1:D1')
+    summary_ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
+    
+    # Export details section
+    summary_ws['A3'] = "📋 Export Details"
+    summary_ws['A3'].font = Font(name='Calibri', size=12, bold=True, color='1E40AF')
+    summary_ws['A3'].fill = subheader_fill
+    
+    summary_ws['A4'] = f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    summary_ws['A5'] = f"Total Inspections: {len(inspections)}"
+    summary_ws['A6'] = f"Date Range: {start_date or 'All'} to {end_date or 'All'}"
+    
+    # Get form name if form_id is provided
+    form_name_display = "All Forms"
+    if form_id:
+        form = db.query(Form).filter(Form.id == form_id).first()
+        if form:
+            form_name_display = form.form_name
+    
+    summary_ws['A7'] = f"Form Filter: {form_name_display}"
+    summary_ws['A8'] = f"Status Filter: {status_filter or 'All Statuses'}"
+    
+    # Statistics section
+    total_inspections = len(inspections)
+    status_counts = {}
+    for inspection in inspections:
+        status = inspection.status.value
+        status_counts[status] = status_counts.get(status, 0) + 1
+    
+    summary_ws['A10'] = "📊 Status Distribution"
+    summary_ws['A10'].font = Font(name='Calibri', size=12, bold=True, color='1E40AF')
+    summary_ws['A10'].fill = subheader_fill
+    
+    # Status distribution headers
+    summary_ws['A11'] = "Status"
+    summary_ws['B11'] = "Count"
+    summary_ws['C11'] = "Percentage"
+    
+    for cell in ['A11', 'B11', 'C11']:
+        summary_ws[cell].font = subheader_font
+        summary_ws[cell].fill = subheader_fill
+        summary_ws[cell].alignment = subheader_alignment
+        summary_ws[cell].border = thin_border
+    
+    # Status data rows
+    row = 12
+    for status, count in status_counts.items():
+        percentage = f"{(count/total_inspections*100):.1f}%" if total_inspections > 0 else "0%"
+        
+        summary_ws[f'A{row}'] = status.upper()
+        summary_ws[f'B{row}'] = count
+        summary_ws[f'C{row}'] = percentage
+        
+        # Apply status-specific styling
+        if status == 'accepted':
+            fill = pass_fill
+        elif status == 'rejected':
+            fill = hold_fill
+        else:
+            fill = pending_fill
+        
+        for col in ['A', 'B', 'C']:
+            cell = summary_ws[f'{col}{row}']
+            cell.fill = fill
+            cell.font = cell_font
+            cell.alignment = cell_alignment
+            cell.border = thin_border
+        
+        row += 1
+    
+    # Form distribution section
+    form_counts = {}
+    for inspection in inspections:
+        form = db.query(Form).filter(Form.id == inspection.form_id).first()
+        form_name = form.form_name if form else "Unknown Form"
+        form_counts[form_name] = form_counts.get(form_name, 0) + 1
+    
+    summary_ws[f'A{row + 1}'] = "📝 Form Distribution"
+    summary_ws[f'A{row + 1}'].font = Font(name='Calibri', size=12, bold=True, color='1E40AF')
+    summary_ws[f'A{row + 1}'].fill = subheader_fill
+    
+    # Form distribution headers
+    row += 2
+    summary_ws[f'A{row}'] = "Form Name"
+    summary_ws[f'B{row}'] = "Count"
+    summary_ws[f'C{row}'] = "Percentage"
+    
+    for cell in [f'A{row}', f'B{row}', f'C{row}']:
+        summary_ws[cell].font = subheader_font
+        summary_ws[cell].fill = subheader_fill
+        summary_ws[cell].alignment = subheader_alignment
+        summary_ws[cell].border = thin_border
+    
+    # Form data rows
+    row += 1
+    for form_name, count in form_counts.items():
+        percentage = f"{(count/total_inspections*100):.1f}%" if total_inspections > 0 else "0%"
+        
+        summary_ws[f'A{row}'] = form_name
+        summary_ws[f'B{row}'] = count
+        summary_ws[f'C{row}'] = percentage
+        
+        for col in ['A', 'B', 'C']:
+            cell = summary_ws[f'{col}{row}']
+            cell.font = cell_font
+            cell.alignment = cell_alignment
+            cell.border = thin_border
+        
+        row += 1
+    
+    # Auto-adjust column widths for summary sheet
+    for column in summary_ws.columns:
+        max_length = 0
+        column_letter = None
+        for cell in column:
+            # Get column letter from the first non-merged cell
+            if column_letter is None and hasattr(cell, 'column_letter'):
+                column_letter = cell.column_letter
+            try:
+                if cell.value and len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        if column_letter:
+            adjusted_width = min(max_length + 2, 50)
+            summary_ws.column_dimensions[column_letter].width = adjusted_width
+    
+    # === POPULATE FORMS OVERVIEW SHEET ===
+    # Forms overview title
+    forms_ws['A1'] = "📝 FORMS OVERVIEW"
+    forms_ws['A1'].font = Font(name='Calibri', size=16, bold=True, color='1E40AF')
+    forms_ws.merge_cells('A1:E1')
+    forms_ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
+    
+    # Get all unique forms from inspections
+    unique_forms = {}
+    for inspection in inspections:
+        form = db.query(Form).filter(Form.id == inspection.form_id).first()
+        if form and form.id not in unique_forms:
+            unique_forms[form.id] = form
+    
+    # Forms overview headers
+    forms_ws['A3'] = "Form Name"
+    forms_ws['B3'] = "Total Fields"
+    forms_ws['C3'] = "Field Types"
+    forms_ws['D3'] = "Inspections Count"
+    forms_ws['E3'] = "Last Used"
+    
+    for cell in ['A3', 'B3', 'C3', 'D3', 'E3']:
+        forms_ws[cell].font = subheader_font
+        forms_ws[cell].fill = subheader_fill
+        forms_ws[cell].alignment = subheader_alignment
+        forms_ws[cell].border = thin_border
+    
+    # Forms data rows
+    row = 4
+    for form_id, form in unique_forms.items():
+        # Get form fields
+        form_fields = db.query(FormField).filter(FormField.form_id == form_id).all()
+        field_types = list(set([field.field_type for field in form_fields]))
+        
+        # Get inspection count for this form
+        inspection_count = len([i for i in inspections if i.form_id == form_id])
+        
+        # Get last used date
+        last_inspection = max([i for i in inspections if i.form_id == form_id], 
+                            key=lambda x: x.created_at, default=None)
+        last_used = last_inspection.created_at.strftime('%Y-%m-%d') if last_inspection else "Never"
+        
+        forms_ws[f'A{row}'] = form.form_name
+        forms_ws[f'B{row}'] = len(form_fields)
+        forms_ws[f'C{row}'] = ", ".join([field_type.value for field_type in field_types])
+        forms_ws[f'D{row}'] = inspection_count
+        forms_ws[f'E{row}'] = last_used
+        
+        for col in ['A', 'B', 'C', 'D', 'E']:
+            cell = forms_ws[f'{col}{row}']
+            cell.font = cell_font
+            cell.alignment = cell_alignment
+            cell.border = thin_border
+        
+        row += 1
+    
+    # Auto-adjust column widths for forms overview sheet
+    for column in forms_ws.columns:
+        max_length = 0
+        column_letter = None
+        for cell in column:
+            # Get column letter from the first non-merged cell
+            if column_letter is None and hasattr(cell, 'column_letter'):
+                column_letter = cell.column_letter
+            try:
+                if cell.value and len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        if column_letter:
+            adjusted_width = min(max_length + 2, 50)
+            forms_ws.column_dimensions[column_letter].width = adjusted_width
+    
+    # Get all unique form fields from the inspections
+    form_fields_map = {}
+    for inspection in inspections:
+        form = db.query(Form).filter(Form.id == inspection.form_id).first()
+        if form and form.id not in form_fields_map:
+            form_fields_map[form.id] = {
+                'name': form.form_name,
+                'fields': sorted(form.fields, key=lambda f: f.field_order)
+            }
+    
+    # Create header row
+    headers = [
+        "Inspection ID",
+        "Form Name",
+        "Inspector",
+        "Status",
+        "Created Date",
+        "Updated Date",
+        "Reviewed By",
+        "Reviewed Date",
+        "Rejection Reason"
+    ]
+    
+    # Add dynamic field headers (collect all unique fields)
+    all_fields = []
+    field_ids_seen = set()
+    for form_data in form_fields_map.values():
+        for field in form_data['fields']:
+            if field.id not in field_ids_seen:
+                all_fields.append(field)
+                field_ids_seen.add(field.id)
+                headers.append(f"{field.field_name} ({field.field_type})")
+    
+    # === DETAILED DATA SHEET ===
+    ws = detail_ws
+    
+    # Write headers
+    for col_num, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_num, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = thin_border
+    
+    # Write data rows
+    row_num = 2
+    for inspection in inspections:
+        form = db.query(Form).filter(Form.id == inspection.form_id).first()
+        inspector = db.query(User).filter(User.id == inspection.inspector_id).first()
+        reviewer = None
+        if inspection.reviewed_by:
+            reviewer = db.query(User).filter(User.id == inspection.reviewed_by).first()
+        
+        # Basic inspection info
+        row_data = [
+            inspection.id,
+            form.form_name if form else "N/A",
+            inspector.username if inspector else "N/A",
+            inspection.status.value.upper(),
+            inspection.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            inspection.updated_at.strftime('%Y-%m-%d %H:%M:%S'),
+            reviewer.username if reviewer else "",
+            inspection.reviewed_at.strftime('%Y-%m-%d %H:%M:%S') if inspection.reviewed_at else "",
+            inspection.rejection_reason or ""
+        ]
+        
+        # Get responses mapped by field_id
+        responses_map = {resp.field_id: resp for resp in inspection.responses}
+        
+        # Add field responses
+        for field in all_fields:
+            field_response = responses_map.get(field.id)
+            cell_value = ""
+            
+            if field_response:
+                if field_response.response_value:
+                    if field.field_type == 'signature':
+                        cell_value = "[Digital Signature]"
+                    elif field.field_type == 'photo':
+                        cell_value = f"[Photo: {field_response.response_value}]"
+                    else:
+                        cell_value = str(field_response.response_value)
+                
+                if field_response.measurement_value is not None:
+                    cell_value = str(field_response.measurement_value)
+                    if field.field_options and 'unit' in field.field_options:
+                        cell_value += f" {field.field_options['unit']}"
+                
+                if field_response.pass_hold_status:
+                    # Handle both enum and string types for pass_hold_status
+                    if hasattr(field_response.pass_hold_status, 'value'):
+                        status_text = field_response.pass_hold_status.value.upper()
+                    else:
+                        status_text = str(field_response.pass_hold_status).upper()
+                    cell_value += f" [{status_text}]" if cell_value else f"[{status_text}]"
+            else:
+                cell_value = "—"
+            
+            row_data.append(cell_value)
+        
+        # Write row
+        for col_num, value in enumerate(row_data, 1):
+            cell = ws.cell(row=row_num, column=col_num, value=value)
+            cell.alignment = cell_alignment
+            cell.border = thin_border
+            cell.font = cell_font
+        
+        row_num += 1
+    
+    # Auto-adjust column widths
+    for col_num in range(1, len(headers) + 1):
+        column_letter = get_column_letter(col_num)
+        max_length = 0
+        for cell in ws[column_letter]:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
+        ws.column_dimensions[column_letter].width = adjusted_width
+    
+    # Save to file
+    excel_filename = f"inspections_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    excel_path = os.path.join("uploads", excel_filename)
+    os.makedirs("uploads", exist_ok=True)
+    
+    wb.save(excel_path)
+    
+    # Return the Excel file
+    return FileResponse(
+        excel_path,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        filename=excel_filename,
+        headers={"Content-Disposition": f"attachment; filename={excel_filename}"}
+    )
 
 @router.get("/{inspection_id}", response_model=InspectionResponseSchema)
 async def get_inspection(
@@ -93,7 +578,7 @@ async def create_inspection(
     db_inspection = Inspection(
         form_id=inspection.form_id,
         inspector_id=current_user.id,
-        status=InspectionStatus.draft
+        status=ModelInspectionStatus.draft
     )
     
     db.add(db_inspection)
@@ -102,12 +587,47 @@ async def create_inspection(
     
     # Create responses
     for response_data in inspection.responses:
+        # Handle conditional fields (field_id can be None)
+        if response_data.field_id is None:
+            logger.debug(f"Saving conditional field response: {response_data.response_value}")
+        else:
+            logger.debug(f"Saving field response for field_id {response_data.field_id}: {response_data.response_value}")
+            
+        # Normalize pass_hold_status to raw string value
+        pass_hold_status = None
+        if response_data.pass_hold_status is not None:
+            if isinstance(response_data.pass_hold_status, SchemaPassHoldStatus):
+                raw_value = response_data.pass_hold_status.value
+            elif isinstance(response_data.pass_hold_status, ModelPassHoldStatus):
+                raw_value = response_data.pass_hold_status.value
+            else:
+                raw_value = str(response_data.pass_hold_status)
+            
+            # Ensure we store the actual string value
+            if raw_value in ["pass", "hold"]:
+                pass_hold_status = raw_value
+
+        # Evaluate flag conditions for this response
+        is_flagged = False
+        if response_data.field_id is not None:
+            # Get the field to check for flag conditions
+            field = db.query(FormField).filter(FormField.id == response_data.field_id).first()
+            if field and field.flag_conditions:
+                is_flagged = evaluate_flag_conditions(
+                    field.flag_conditions,
+                    field.field_type,
+                    response_data.response_value,
+                    response_data.measurement_value,
+                    pass_hold_status
+                )
+
         db_response = InspectionResponse(
             inspection_id=db_inspection.id,
             field_id=response_data.field_id,
             response_value=response_data.response_value,
             measurement_value=response_data.measurement_value,
-            pass_hold_status=response_data.pass_hold_status
+            pass_hold_status=pass_hold_status,
+            is_flagged=is_flagged
         )
         db.add(db_response)
     
@@ -137,10 +657,10 @@ async def update_inspection(
         can_edit = True
     elif current_user.role.value == "user" and inspection.inspector_id == current_user.id:
         # Users can only edit their own draft inspections
-        can_edit = inspection.status == InspectionStatus.draft
-    elif current_user.role.value in ["supervisor", "management"]:
-        # Supervisors and management can review submitted inspections
-        can_edit = inspection.status == InspectionStatus.submitted
+        can_edit = inspection.status == ModelInspectionStatus.draft
+    elif current_user.role.value == "supervisor":
+        # Supervisors can review submitted inspections
+        can_edit = inspection.status == ModelInspectionStatus.submitted
     
     if not can_edit:
         raise HTTPException(
@@ -150,11 +670,75 @@ async def update_inspection(
     
     # Update inspection
     update_data = inspection_update.dict(exclude_unset=True)
+
+    # Handle responses update
+    responses_data = update_data.pop("responses", None)
+    if responses_data is not None:
+        # Delete existing responses
+        db.query(InspectionResponse).filter(
+            InspectionResponse.inspection_id == inspection_id
+        ).delete()
+        
+        # Create new responses with flag evaluation
+        for response_data in responses_data:
+            # Convert Pydantic model to dict if needed
+            if hasattr(response_data, 'dict'):
+                response_dict = response_data.dict()
+            else:
+                response_dict = response_data
+            
+            # Normalize pass_hold_status to raw string value
+            pass_hold_status = None
+            pass_hold_value = response_dict.get('pass_hold_status')
+            if pass_hold_value is not None:
+                if isinstance(pass_hold_value, SchemaPassHoldStatus):
+                    raw_value = pass_hold_value.value
+                elif isinstance(pass_hold_value, ModelPassHoldStatus):
+                    raw_value = pass_hold_value.value
+                else:
+                    raw_value = str(pass_hold_value)
+                
+                # Ensure we store the actual string value
+                if raw_value in ["pass", "hold"]:
+                    pass_hold_status = raw_value
+
+            # Evaluate flag conditions for this response
+            is_flagged = False
+            field_id = response_dict.get('field_id')
+            if field_id is not None:
+                # Get the field to check for flag conditions
+                field = db.query(FormField).filter(FormField.id == field_id).first()
+                if field and field.flag_conditions:
+                    is_flagged = evaluate_flag_conditions(
+                        field.flag_conditions,
+                        field.field_type,
+                        response_dict.get('response_value'),
+                        response_dict.get('measurement_value'),
+                        pass_hold_status
+                    )
+
+            db_response = InspectionResponse(
+                inspection_id=inspection_id,
+                field_id=field_id,
+                response_value=response_dict.get('response_value'),
+                measurement_value=response_dict.get('measurement_value'),
+                pass_hold_status=pass_hold_status,
+                is_flagged=is_flagged
+            )
+            db.add(db_response)
+
+    status_value = update_data.pop("status", None)
+    status_enum = None
+    if status_value is not None:
+        status_enum = ModelInspectionStatus(
+            status_value.value if isinstance(status_value, SchemaInspectionStatus) else status_value
+        )
+        inspection.status = status_enum
+
     for field, value in update_data.items():
         setattr(inspection, field, value)
-    
-    # If status is being changed to accepted/rejected, set reviewer info
-    if inspection_update.status in [InspectionStatus.accepted, InspectionStatus.rejected]:
+
+    if status_enum in (ModelInspectionStatus.accepted, ModelInspectionStatus.rejected):
         inspection.reviewed_by = current_user.id
         inspection.reviewed_at = datetime.utcnow()
     
@@ -185,13 +769,13 @@ async def submit_inspection(
             detail="Not enough permissions"
         )
     
-    if inspection.status != InspectionStatus.draft:
+    if inspection.status != ModelInspectionStatus.draft:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only draft inspections can be submitted"
         )
-    
-    inspection.status = InspectionStatus.submitted
+
+    inspection.status = ModelInspectionStatus.submitted
     db.commit()
     
     return {"message": "Inspection submitted successfully"}
@@ -216,7 +800,7 @@ async def delete_inspection(
         can_delete = True
     elif (current_user.role.value == "user" and 
           inspection.inspector_id == current_user.id and 
-          inspection.status == InspectionStatus.draft):
+          inspection.status == ModelInspectionStatus.draft):
         can_delete = True
     
     if not can_delete:
@@ -239,7 +823,10 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Upload file for inspection field"""
+    """Upload file for inspection field with security validation"""
+    # Import file validation utility
+    from utils.file_validation import FileValidator
+    
     inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
     if not inspection:
         raise HTTPException(
@@ -255,25 +842,59 @@ async def upload_file(
             detail="Not enough permissions"
         )
     
+    # SECURITY: Validate file before processing
+    # Define allowed file types based on file_type parameter
+    allowed_types = []
+    if file_type in ['image', 'photo']:
+        allowed_types = ['image']
+    elif file_type in ['document', 'report']:
+        allowed_types = ['document']
+    elif file_type in ['spreadsheet', 'data']:
+        allowed_types = ['spreadsheet']
+    else:
+        # Default to images and documents for inspection files
+        allowed_types = ['image', 'document']
+    
+    # Validate file with security checks
+    try:
+        file_metadata = await FileValidator.validate_upload_file(
+            file=file,
+            allowed_types=allowed_types,
+            max_size=10 * 1024 * 1024  # 10MB limit
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File validation failed: {str(e)}"
+        )
+    
     # Create uploads directory if it doesn't exist
     upload_dir = "uploads"
     os.makedirs(upload_dir, exist_ok=True)
     
-    # Generate unique filename
-    file_extension = os.path.splitext(file.filename)[1]
+    # Generate unique filename using sanitized name
+    file_extension = os.path.splitext(file_metadata['safe_filename'])[1]
     unique_filename = f"{uuid.uuid4()}{file_extension}"
     file_path = os.path.join(upload_dir, unique_filename)
     
-    # Save file
-    with open(file_path, "wb") as buffer:
-        content = await file.read()
-        buffer.write(content)
+    # Save file securely
+    try:
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save file"
+        )
     
-    # Save file info to database
+    # Save file info to database with security metadata
     db_file = InspectionFile(
         inspection_id=inspection_id,
         field_id=field_id,
-        file_name=file.filename,
+        file_name=file_metadata['safe_filename'],  # Use sanitized filename
         file_path=file_path,
         file_type=file_type
     )
@@ -281,4 +902,575 @@ async def upload_file(
     db.add(db_file)
     db.commit()
     
-    return {"message": "File uploaded successfully", "file_id": db_file.id}
+    return {
+        "message": "File uploaded successfully", 
+        "file_id": db_file.id,
+        "original_filename": file_metadata['original_filename'],
+        "safe_filename": file_metadata['safe_filename'],
+        "file_hash": file_metadata['hash']
+    }
+
+@router.get("/{inspection_id}/export-pdf")
+async def export_inspection_to_pdf(
+    inspection_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Export inspection to PDF with questions on left and answers on right"""
+    # Get inspection with all related data
+    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not inspection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Inspection not found"
+        )
+    
+    # Check permissions
+    if (current_user.role.value == "user" and 
+        inspection.inspector_id != current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+    
+    # Get form and fields
+    form = db.query(Form).filter(Form.id == inspection.form_id).first()
+    if not form:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Form not found"
+        )
+    
+    # Get inspector info
+    inspector = db.query(User).filter(User.id == inspection.inspector_id).first()
+    
+    # Create PDF
+    pdf_filename = f"inspection_{inspection_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf_path = os.path.join("uploads", pdf_filename)
+    os.makedirs("uploads", exist_ok=True)
+    
+    # Create the PDF document
+    doc = SimpleDocTemplate(pdf_path, pagesize=A4, 
+                           rightMargin=30, leftMargin=30,
+                           topMargin=30, bottomMargin=30)
+    
+    # Container for the 'Flowable' objects
+    elements = []
+    
+    # Define enhanced styles
+    styles = getSampleStyleSheet()
+    
+    # Enhanced title style with gradient-like effect
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=20,
+        textColor=colors.HexColor('#1e3a8a'),
+        spaceAfter=16,
+        spaceBefore=8,
+        alignment=TA_CENTER,
+        fontName='Helvetica-Bold'
+    )
+    
+    # Enhanced heading style
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=16,
+        textColor=colors.HexColor('#1e40af'),
+        spaceAfter=12,
+        spaceBefore=8,
+        fontName='Helvetica-Bold',
+        borderWidth=0,
+        borderPadding=0,
+        leftIndent=0
+    )
+    
+    # Enhanced section heading style
+    section_style = ParagraphStyle(
+        'SectionHeading',
+        parent=styles['Heading3'],
+        fontSize=14,
+        textColor=colors.HexColor('#374151'),
+        spaceAfter=8,
+        spaceBefore=12,
+        fontName='Helvetica-Bold',
+        backColor=colors.HexColor('#f3f4f6'),
+        borderWidth=1,
+        borderColor=colors.HexColor('#d1d5db'),
+        borderPadding=6,
+        leftIndent=6
+    )
+    
+    # Enhanced normal style
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor=colors.HexColor('#374151'),
+        spaceAfter=4,
+        leading=12
+    )
+    
+    # Status indicator styles
+    pass_style = ParagraphStyle(
+        'PassStatus',
+        parent=normal_style,
+        textColor=colors.HexColor('#059669'),
+        fontName='Helvetica-Bold'
+    )
+    
+    hold_style = ParagraphStyle(
+        'HoldStatus',
+        parent=normal_style,
+        textColor=colors.HexColor('#dc2626'),
+        fontName='Helvetica-Bold'
+    )
+    
+    # Enhanced title with company branding
+    title = Paragraph(f"<b>📋 INSPECTION REPORT</b>", title_style)
+    elements.append(title)
+    
+    # Subtitle with form name
+    subtitle = Paragraph(f"<i>{form.form_name}</i>", ParagraphStyle(
+        'Subtitle',
+        parent=normal_style,
+        fontSize=12,
+        textColor=colors.HexColor('#6b7280'),
+        alignment=TA_CENTER,
+        spaceAfter=20
+    ))
+    elements.append(subtitle)
+    elements.append(Spacer(1, 16))
+    
+    # Enhanced Inspection Info Section
+    info_section = Paragraph("<b>📊 INSPECTION DETAILS</b>", section_style)
+    elements.append(info_section)
+    elements.append(Spacer(1, 8))
+    
+    # Status indicator with color coding
+    status_color = colors.HexColor('#059669') if inspection.status.value == 'approved' else \
+                   colors.HexColor('#dc2626') if inspection.status.value == 'rejected' else \
+                   colors.HexColor('#d97706')
+    
+    status_indicator = f"🔍 {inspection.status.value.upper()}"
+    
+    info_data = [
+        ['🆔 Inspection ID:', str(inspection.id)],
+        ['📋 Form:', form.form_name],
+        ['👤 Inspector:', inspector.username if inspector else 'N/A'],
+        ['📊 Status:', status_indicator],
+        ['📅 Created:', inspection.created_at.strftime('%Y-%m-%d %H:%M:%S')],
+        ['🔄 Updated:', inspection.updated_at.strftime('%Y-%m-%d %H:%M:%S')]
+    ]
+    
+    if inspection.reviewed_by:
+        reviewer = db.query(User).filter(User.id == inspection.reviewed_by).first()
+        info_data.append(['✅ Reviewed By:', reviewer.username if reviewer else 'N/A'])
+        if inspection.reviewed_at:
+            info_data.append(['📅 Reviewed At:', inspection.reviewed_at.strftime('%Y-%m-%d %H:%M:%S')])
+    
+    if inspection.rejection_reason:
+        info_data.append(['❌ Rejection Reason:', inspection.rejection_reason])
+    
+    info_table = Table(info_data, colWidths=[2.2*inch, 3.8*inch])
+    info_table.setStyle(TableStyle([
+        # Header column styling
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#1e40af')),
+        ('TEXTCOLOR', (0, 0), (0, -1), colors.white),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (0, -1), 10),
+        
+        # Data column styling
+        ('BACKGROUND', (1, 0), (1, -1), colors.HexColor('#f8fafc')),
+        ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#374151')),
+        ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+        ('FONTSIZE', (1, 0), (1, -1), 10),
+        
+        # Status row special styling
+        ('BACKGROUND', (1, 3), (1, 3), status_color),
+        ('TEXTCOLOR', (1, 3), (1, 3), colors.white),
+        ('FONTNAME', (1, 3), (1, 3), 'Helvetica-Bold'),
+        
+        # General styling
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#d1d5db')),
+        ('LEFTPADDING', (0, 0), (-1, -1), 10),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        
+        # Rounded corners effect with alternating backgrounds
+        *[('BACKGROUND', (1, i), (1, i), colors.HexColor('#ffffff') if i % 2 == 0 else colors.HexColor('#f8fafc'))
+          for i in range(len(info_data)) if i != 3]  # Skip status row
+    ]))
+    
+    elements.append(info_table)
+    elements.append(Spacer(1, 24))
+    
+    # Enhanced Responses Section
+    responses_title = Paragraph("<b>📝 INSPECTION RESPONSES</b>", section_style)
+    elements.append(responses_title)
+    elements.append(Spacer(1, 12))
+    
+    # Get all responses mapped by field_id
+    responses_map = {resp.field_id: resp for resp in inspection.responses}
+    
+    # Sort fields by field_order
+    sorted_fields = sorted(form.fields, key=lambda f: f.field_order)
+    
+    # Group fields by type for better organization
+    field_groups = {}
+    for field in sorted_fields:
+        field_type = field.field_type
+        if field_type not in field_groups:
+            field_groups[field_type] = []
+        field_groups[field_type].append(field)
+    
+    # Field type icons mapping
+    field_icons = {
+        'text': '📝',
+        'dropdown': '📋',
+        'search_dropdown': '🔍',
+        'button': '🔘',
+        'photo': '📷',
+        'signature': '✍️',
+        'measurement': '📏',
+        'notes': '📄',
+        'datetime': '📅',
+        'time': '⏰'
+    }
+    
+    # Import flag evaluator
+    from utils.flag_evaluator import FlagEvaluator
+    
+    # Create responses table with enhanced formatting
+    response_data = [
+        [
+            Paragraph("<b>🔍 QUESTION</b>", ParagraphStyle('HeaderLeft', parent=normal_style, fontSize=11, textColor=colors.white, fontName='Helvetica-Bold')),
+            Paragraph("<b>💬 RESPONSE</b>", ParagraphStyle('HeaderRight', parent=normal_style, fontSize=11, textColor=colors.white, fontName='Helvetica-Bold'))
+        ]
+    ]
+    
+    # Track flagged rows for styling
+    flagged_rows = []
+    
+    for field in sorted_fields:
+        field_response = responses_map.get(field.id)
+        
+        # Enhanced question formatting with icons
+        field_icon = field_icons.get(field.field_type, '📋')
+        question_text = f"{field_icon} {field.field_name}"
+        if field.is_required:
+            question_text += " <font color='red'>*</font>"
+        
+        # Field type badge
+        field_type_badge = f"<font size=8 color='#6b7280'>[{field.field_type.value.upper()}]</font>"
+        
+        # Enhanced answer formatting with status indicators
+        answer_text = ""
+        answer_style = normal_style
+        is_flagged = False
+        
+        if field_response:
+            # Evaluate flag conditions for this response
+            if field.flag_conditions:
+                is_flagged = FlagEvaluator.evaluate_field_response(
+                    field_type=field.field_type,
+                    response_value=field_response.response_value,
+                    measurement_value=field_response.measurement_value,
+                    flag_conditions=field.flag_conditions
+                )
+            
+            if field_response.response_value:
+                # Handle different field types with appropriate formatting
+                if field.field_type == 'signature' and field_response.response_value.startswith('data:image'):
+                    # Process signature image
+                    try:
+                        # Extract base64 data from data URL
+                        base64_data = field_response.response_value.split(',')[1]
+                        image_data = base64.b64decode(base64_data)
+                        
+                        # Create PIL Image from bytes
+                        image_io = BytesIO(image_data)
+                        pil_image = PILImage.open(image_io)
+                        
+                        # Ensure image is in RGB mode
+                        if pil_image.mode != 'RGB':
+                            pil_image = pil_image.convert('RGB')
+                        
+                        # Save PIL image to BytesIO for ImageReader
+                        img_buffer = BytesIO()
+                        pil_image.save(img_buffer, format='PNG')
+                        img_buffer.seek(0)
+                        
+                        # Create ImageReader object
+                        image_reader = ImageReader(img_buffer)
+                        
+                        # Create ReportLab Image with size constraints
+                        signature_image = Image(image_reader, width=2*inch, height=1*inch)
+                        
+                        # Create a combined answer with text and image
+                        answer_paragraph = [
+                            Paragraph("✍️ <font color='#059669'>[Digital Signature]</font>", 
+                                    ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)),
+                            signature_image
+                        ]
+                        
+                        # Add this row with special handling for image
+                        question_paragraph = Paragraph(
+                            f"<b>{question_text}</b><br/>{field_type_badge}",
+                            ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
+                        )
+                        
+                        response_data.append([question_paragraph, answer_paragraph])
+                        
+                        # Track flagged rows if needed
+                        if is_flagged:
+                            flagged_rows.append(len(response_data) - 1)
+                        
+                        continue  # Skip the normal processing for this field
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing signature image for field {field.id}: {e}")
+                        answer_text = "✍️ <font color='#dc2626'>[Error processing signature]</font>"
+                elif field.field_type == 'photo':
+                    # Process photo image
+                    try:
+                        if field_response.response_value.startswith('data:image'):
+                            # Extract base64 data from data URL
+                            base64_data = field_response.response_value.split(',')[1]
+                            image_data = base64.b64decode(base64_data)
+                            
+                            # Create PIL Image from bytes
+                            image_io = BytesIO(image_data)
+                            pil_image = PILImage.open(image_io)
+                            
+                            # Ensure image is in RGB mode
+                            if pil_image.mode != 'RGB':
+                                pil_image = pil_image.convert('RGB')
+                            
+                            # Save PIL image to BytesIO for ImageReader
+                            img_buffer = BytesIO()
+                            pil_image.save(img_buffer, format='PNG')
+                            img_buffer.seek(0)
+                            
+                            # Create ImageReader object
+                            image_reader = ImageReader(img_buffer)
+                            
+                            # Create ReportLab Image with size constraints
+                            photo_image = Image(image_reader, width=2*inch, height=1.5*inch)
+                            
+                            # Create a combined answer with text and image
+                            answer_paragraph = [
+                                Paragraph("📷 <font color='#059669'>[Photo]</font>", 
+                                        ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)),
+                                photo_image
+                            ]
+                            
+                            # Add this row with special handling for image
+                            question_paragraph = Paragraph(
+                                f"<b>{question_text}</b><br/>{field_type_badge}",
+                                ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
+                            )
+                            
+                            response_data.append([question_paragraph, answer_paragraph])
+                            
+                            # Track flagged rows if needed
+                            if is_flagged:
+                                flagged_rows.append(len(response_data) - 1)
+                            
+                            continue  # Skip the normal processing for this field
+                        else:
+                            answer_text = f"📷 <font color='#059669'>[Photo: {field_response.response_value}]</font>"
+                    except Exception as e:
+                        logger.error(f"Error processing photo image for field {field.id}: {e}")
+                        answer_text = f"📷 <font color='#dc2626'>[Error processing photo]</font>"
+                elif field.field_type == 'datetime':
+                    answer_text = f"📅 {field_response.response_value}"
+                elif field.field_type == 'time':
+                    answer_text = f"⏰ {field_response.response_value}"
+                elif field.field_type == 'dropdown' or field.field_type == 'search_dropdown':
+                    answer_text = f"📋 {field_response.response_value}"
+                else:
+                    answer_text = str(field_response.response_value)
+            
+            # Handle measurement values with units
+            if field_response.measurement_value is not None:
+                unit = ""
+                if field.field_options and 'unit' in field.field_options:
+                    unit = f" {field.field_options['unit']}"
+                answer_text = f"📏 {field_response.measurement_value}{unit}"
+            
+            # Enhanced pass/hold status with color coding
+            if field_response.pass_hold_status:
+                # Handle both enum and string types for pass_hold_status
+                if hasattr(field_response.pass_hold_status, 'value'):
+                    status_value = field_response.pass_hold_status.value.upper()
+                else:
+                    status_value = str(field_response.pass_hold_status).upper()
+                if status_value == 'PASS':
+                    status_indicator = f" <font color='#059669'><b>[✅ {status_value}]</b></font>"
+                else:  # HOLD
+                    status_indicator = f" <font color='#dc2626'><b>[❌ {status_value}]</b></font>"
+                answer_text += status_indicator if answer_text else status_indicator[1:]  # Remove leading space if no answer
+            
+            # Add flag indicator if flagged
+            if is_flagged:
+                answer_text += " <font color='#dc2626'><b>[🚩 FLAGGED]</b></font>"
+        else:
+            answer_text = "<font color='#9ca3af'>— No response provided —</font>"
+        
+        # Create formatted paragraphs
+        question_paragraph = Paragraph(
+            f"<b>{question_text}</b><br/>{field_type_badge}",
+            ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
+        )
+        
+        answer_paragraph = Paragraph(
+            answer_text,
+            ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)
+        )
+        
+        response_data.append([question_paragraph, answer_paragraph])
+        
+        # Track flagged rows (add 1 because header is row 0)
+        if is_flagged:
+            flagged_rows.append(len(response_data) - 1)
+    
+    # Create the enhanced table
+    response_table = Table(response_data, colWidths=[3.2*inch, 3.3*inch])
+    response_table.setStyle(TableStyle([
+        # Header row styling with gradient-like effect
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('TOPPADDING', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        
+        # Question column styling
+        ('BACKGROUND', (0, 1), (0, -1), colors.HexColor('#f8fafc')),
+        ('TEXTCOLOR', (0, 1), (0, -1), colors.HexColor('#374151')),
+        ('ALIGN', (0, 1), (0, -1), 'LEFT'),
+        ('FONTNAME', (0, 1), (0, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (0, -1), 10),
+        
+        # Answer column styling with alternating colors
+        ('TEXTCOLOR', (1, 1), (1, -1), colors.HexColor('#374151')),
+        ('ALIGN', (1, 1), (1, -1), 'LEFT'),
+        ('FONTNAME', (1, 1), (1, -1), 'Helvetica'),
+        ('FONTSIZE', (1, 1), (1, -1), 10),
+        
+        # Enhanced grid and spacing
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#d1d5db')),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 12),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+        ('TOPPADDING', (0, 1), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 10),
+        
+        # Alternating row colors for better readability
+        *[('BACKGROUND', (1, i), (1, i), colors.HexColor('#ffffff') if i % 2 == 1 else colors.HexColor('#f9fafb'))
+          for i in range(1, len(response_data)) if i not in flagged_rows],
+        
+        # Special styling for rows with PASS/HOLD status (non-flagged rows only)
+        *[('BACKGROUND', (1, i), (1, i), colors.HexColor('#f0fdf4') if 'PASS' in str(response_data[i][1]) 
+           else colors.HexColor('#fef2f2') if 'HOLD' in str(response_data[i][1]) 
+           else colors.HexColor('#ffffff') if i % 2 == 1 else colors.HexColor('#f9fafb'))
+          for i in range(1, len(response_data)) if i not in flagged_rows],
+        
+        # Red background for flagged abnormal data
+        *[('BACKGROUND', (0, i), (-1, i), colors.HexColor('#fee2e2'))  # Light red background
+          for i in flagged_rows],
+        *[('TEXTCOLOR', (0, i), (-1, i), colors.HexColor('#991b1b'))  # Dark red text
+          for i in flagged_rows],
+        *[('FONTNAME', (0, i), (-1, i), 'Helvetica-Bold')  # Bold text for flagged rows
+          for i in flagged_rows]
+    ]))
+    
+    elements.append(response_table)
+    
+    # Enhanced footer section
+    elements.append(Spacer(1, 30))
+    
+    # Summary statistics
+    total_fields = len(sorted_fields)
+    answered_fields = len([f for f in sorted_fields if responses_map.get(f.id)])
+    completion_rate = (answered_fields / total_fields * 100) if total_fields > 0 else 0
+    
+    # Pass/Hold summary
+    def get_status_value(response):
+        if hasattr(response.pass_hold_status, 'value'):
+            return response.pass_hold_status.value
+        else:
+            return str(response.pass_hold_status)
+    
+    pass_count = len([r for r in inspection.responses if r.pass_hold_status and get_status_value(r) == 'pass'])
+    hold_count = len([r for r in inspection.responses if r.pass_hold_status and get_status_value(r) == 'hold'])
+    flagged_count = len(flagged_rows)
+    
+    # Summary section
+    summary_title = Paragraph("<b>📊 INSPECTION SUMMARY</b>", section_style)
+    elements.append(summary_title)
+    elements.append(Spacer(1, 8))
+    
+    summary_data = [
+        ['📋 Total Fields:', str(total_fields)],
+        ['✅ Completed Fields:', f"{answered_fields} ({completion_rate:.1f}%)"],
+        ['🟢 Pass Count:', str(pass_count)],
+        ['🔴 Hold Count:', str(hold_count)],
+        ['🚩 Flagged Abnormal:', str(flagged_count)],
+        ['📊 Overall Status:', inspection.status.value.upper()]
+    ]
+    
+    summary_table = Table(summary_data, colWidths=[2.5*inch, 2*inch])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#1e40af')),
+        ('TEXTCOLOR', (0, 0), (0, -1), colors.white),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (0, -1), 10),
+        
+        ('BACKGROUND', (1, 0), (1, -1), colors.HexColor('#f8fafc')),
+        ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#374151')),
+        ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+        ('FONTSIZE', (1, 0), (1, -1), 10),
+        
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#d1d5db')),
+        ('LEFTPADDING', (0, 0), (-1, -1), 10),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    
+    elements.append(summary_table)
+    elements.append(Spacer(1, 20))
+    
+    # Enhanced footer with branding
+    footer_text = f"📄 Generated on {datetime.now().strftime('%Y-%m-%d at %H:%M:%S')} by InsPecPro™"
+    footer_subtext = "Professional Inspection Management System"
+    
+    footer = Paragraph(f"<i>{footer_text}</i><br/><font size=7 color='#9ca3af'>{footer_subtext}</font>", ParagraphStyle(
+        'Footer',
+        parent=styles['Normal'],
+        fontSize=9,
+        textColor=colors.HexColor('#6b7280'),
+        alignment=TA_CENTER,
+        spaceAfter=0
+    ))
+    elements.append(footer)
+    
+    # Build PDF
+    doc.build(elements)
+    
+    # Return the PDF file
+    return FileResponse(
+        pdf_path,
+        media_type='application/pdf',
+        filename=pdf_filename,
+        headers={"Content-Disposition": f"attachment; filename={pdf_filename}"}
+    )
