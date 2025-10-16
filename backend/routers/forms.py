@@ -66,7 +66,8 @@ async def create_form(
             measurement_min=field_data.measurement_min,
             measurement_max=field_data.measurement_max,
             is_required=field_data.is_required,
-            field_order=field_data.field_order
+            field_order=field_data.field_order,
+            flag_conditions=field_data.flag_conditions
         )
         db.add(db_field)
     
@@ -99,6 +100,77 @@ async def update_form(
     db.refresh(form)
     
     return form
+
+@router.put("/{form_id}/fields/{field_id}/flag-conditions")
+async def update_field_flag_conditions(
+    form_id: int,
+    field_id: int,
+    flag_conditions: dict,
+    current_user: User = Depends(require_role(["admin"])),
+    db: Session = Depends(get_db)
+):
+    """Update flag conditions for a specific form field (Admin only)"""
+    field = db.query(FormField).filter(
+        FormField.id == field_id,
+        FormField.form_id == form_id
+    ).first()
+    
+    if not field:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Field not found"
+        )
+    
+    field.flag_conditions = flag_conditions
+    db.commit()
+    db.refresh(field)
+    
+    return {"message": "Flag conditions updated successfully", "flag_conditions": field.flag_conditions}
+
+@router.get("/{form_id}/fields/{field_id}/flag-conditions")
+async def get_field_flag_conditions(
+    form_id: int,
+    field_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get flag conditions for a specific form field"""
+    field = db.query(FormField).filter(
+        FormField.id == field_id,
+        FormField.form_id == form_id
+    ).first()
+    
+    if not field:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Field not found"
+        )
+    
+    return {"field_id": field.id, "flag_conditions": field.flag_conditions}
+
+@router.delete("/{form_id}/fields/{field_id}/flag-conditions")
+async def delete_field_flag_conditions(
+    form_id: int,
+    field_id: int,
+    current_user: User = Depends(require_role(["admin"])),
+    db: Session = Depends(get_db)
+):
+    """Remove flag conditions from a specific form field (Admin only)"""
+    field = db.query(FormField).filter(
+        FormField.id == field_id,
+        FormField.form_id == form_id
+    ).first()
+    
+    if not field:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Field not found"
+        )
+    
+    field.flag_conditions = None
+    db.commit()
+    
+    return {"message": "Flag conditions removed successfully"}
 
 @router.delete("/{form_id}")
 async def delete_form(
@@ -144,7 +216,8 @@ async def add_form_field(
         measurement_min=field.measurement_min,
         measurement_max=field.measurement_max,
         is_required=field.is_required,
-        field_order=field.field_order
+        field_order=field.field_order,
+        flag_conditions=field.flag_conditions
     )
     
     db.add(db_field)
@@ -219,6 +292,7 @@ async def update_form_complete(
                 db_field.measurement_max = field_data.measurement_max
                 db_field.is_required = field_data.is_required
                 db_field.field_order = field_data.field_order
+                db_field.flag_conditions = field_data.flag_conditions
                 updated_field_ids.add(field_data.id)
         else:
             # Create new field
@@ -233,7 +307,8 @@ async def update_form_complete(
                 measurement_min=field_data.measurement_min,
                 measurement_max=field_data.measurement_max,
                 is_required=field_data.is_required,
-                field_order=field_data.field_order
+                field_order=field_data.field_order,
+                flag_conditions=field_data.flag_conditions
             )
             db.add(db_field)
     

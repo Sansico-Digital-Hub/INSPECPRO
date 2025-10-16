@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import uuid
 from reportlab.lib.pagesizes import letter, A4
@@ -11,8 +11,10 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+from reportlab.lib.utils import ImageReader
 from io import BytesIO
 import base64
+from PIL import Image as PILImage
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -36,6 +38,7 @@ from schemas import (
     PassHoldStatus as SchemaPassHoldStatus,
 )
 from auth import get_current_user, require_role
+from utils.flag_evaluator import evaluate_flag_conditions
 
 router = APIRouter()
 
@@ -110,7 +113,6 @@ async def export_inspections_to_excel(
         try:
             end_dt = datetime.strptime(end_date, '%Y-%m-%d')
             # Add one day to include the entire end date
-            from datetime import timedelta
             end_dt = end_dt + timedelta(days=1)
             query = query.filter(Inspection.created_at < end_dt)
         except ValueError:
@@ -603,12 +605,27 @@ async def create_inspection(
             if raw_value in ["pass", "hold"]:
                 pass_hold_status = raw_value
 
+        # Evaluate flag conditions for this response
+        is_flagged = False
+        if response_data.field_id is not None:
+            # Get the field to check for flag conditions
+            field = db.query(FormField).filter(FormField.id == response_data.field_id).first()
+            if field and field.flag_conditions:
+                is_flagged = evaluate_flag_conditions(
+                    field.flag_conditions,
+                    field.field_type,
+                    response_data.response_value,
+                    response_data.measurement_value,
+                    pass_hold_status
+                )
+
         db_response = InspectionResponse(
             inspection_id=db_inspection.id,
             field_id=response_data.field_id,
             response_value=response_data.response_value,
             measurement_value=response_data.measurement_value,
-            pass_hold_status=pass_hold_status
+            pass_hold_status=pass_hold_status,
+            is_flagged=is_flagged
         )
         db.add(db_response)
     
@@ -651,6 +668,62 @@ async def update_inspection(
     
     # Update inspection
     update_data = inspection_update.dict(exclude_unset=True)
+
+    # Handle responses update
+    responses_data = update_data.pop("responses", None)
+    if responses_data is not None:
+        # Delete existing responses
+        db.query(InspectionResponse).filter(
+            InspectionResponse.inspection_id == inspection_id
+        ).delete()
+        
+        # Create new responses with flag evaluation
+        for response_data in responses_data:
+            # Convert Pydantic model to dict if needed
+            if hasattr(response_data, 'dict'):
+                response_dict = response_data.dict()
+            else:
+                response_dict = response_data
+            
+            # Normalize pass_hold_status to raw string value
+            pass_hold_status = None
+            pass_hold_value = response_dict.get('pass_hold_status')
+            if pass_hold_value is not None:
+                if isinstance(pass_hold_value, SchemaPassHoldStatus):
+                    raw_value = pass_hold_value.value
+                elif isinstance(pass_hold_value, ModelPassHoldStatus):
+                    raw_value = pass_hold_value.value
+                else:
+                    raw_value = str(pass_hold_value)
+                
+                # Ensure we store the actual string value
+                if raw_value in ["pass", "hold"]:
+                    pass_hold_status = raw_value
+
+            # Evaluate flag conditions for this response
+            is_flagged = False
+            field_id = response_dict.get('field_id')
+            if field_id is not None:
+                # Get the field to check for flag conditions
+                field = db.query(FormField).filter(FormField.id == field_id).first()
+                if field and field.flag_conditions:
+                    is_flagged = evaluate_flag_conditions(
+                        field.flag_conditions,
+                        field.field_type,
+                        response_dict.get('response_value'),
+                        response_dict.get('measurement_value'),
+                        pass_hold_status
+                    )
+
+            db_response = InspectionResponse(
+                inspection_id=inspection_id,
+                field_id=field_id,
+                response_value=response_dict.get('response_value'),
+                measurement_value=response_dict.get('measurement_value'),
+                pass_hold_status=pass_hold_status,
+                is_flagged=is_flagged
+            )
+            db.add(db_response)
 
     status_value = update_data.pop("status", None)
     status_enum = None
@@ -1024,6 +1097,9 @@ async def export_inspection_to_pdf(
         'time': '⏰'
     }
     
+    # Import flag evaluator
+    from utils.flag_evaluator import FlagEvaluator
+    
     # Create responses table with enhanced formatting
     response_data = [
         [
@@ -1031,6 +1107,9 @@ async def export_inspection_to_pdf(
             Paragraph("<b>💬 RESPONSE</b>", ParagraphStyle('HeaderRight', parent=normal_style, fontSize=11, textColor=colors.white, fontName='Helvetica-Bold'))
         ]
     ]
+    
+    # Track flagged rows for styling
+    flagged_rows = []
     
     for field in sorted_fields:
         field_response = responses_map.get(field.id)
@@ -1047,14 +1126,122 @@ async def export_inspection_to_pdf(
         # Enhanced answer formatting with status indicators
         answer_text = ""
         answer_style = normal_style
+        is_flagged = False
         
         if field_response:
+            # Evaluate flag conditions for this response
+            if field.flag_conditions:
+                is_flagged = FlagEvaluator.evaluate_field_response(
+                    field_type=field.field_type,
+                    response_value=field_response.response_value,
+                    measurement_value=field_response.measurement_value,
+                    flag_conditions=field.flag_conditions
+                )
+            
             if field_response.response_value:
                 # Handle different field types with appropriate formatting
                 if field.field_type == 'signature' and field_response.response_value.startswith('data:image'):
-                    answer_text = "✍️ <font color='#059669'>[Digital Signature Captured]</font>"
+                    # Process signature image
+                    try:
+                        # Extract base64 data from data URL
+                        base64_data = field_response.response_value.split(',')[1]
+                        image_data = base64.b64decode(base64_data)
+                        
+                        # Create PIL Image from bytes
+                        image_io = BytesIO(image_data)
+                        pil_image = PILImage.open(image_io)
+                        
+                        # Ensure image is in RGB mode
+                        if pil_image.mode != 'RGB':
+                            pil_image = pil_image.convert('RGB')
+                        
+                        # Save PIL image to BytesIO for ImageReader
+                        img_buffer = BytesIO()
+                        pil_image.save(img_buffer, format='PNG')
+                        img_buffer.seek(0)
+                        
+                        # Create ImageReader object
+                        image_reader = ImageReader(img_buffer)
+                        
+                        # Create ReportLab Image with size constraints
+                        signature_image = Image(image_reader, width=2*inch, height=1*inch)
+                        
+                        # Create a combined answer with text and image
+                        answer_paragraph = [
+                            Paragraph("✍️ <font color='#059669'>[Digital Signature]</font>", 
+                                    ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)),
+                            signature_image
+                        ]
+                        
+                        # Add this row with special handling for image
+                        question_paragraph = Paragraph(
+                            f"<b>{question_text}</b><br/>{field_type_badge}",
+                            ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
+                        )
+                        
+                        response_data.append([question_paragraph, answer_paragraph])
+                        
+                        # Track flagged rows if needed
+                        if is_flagged:
+                            flagged_rows.append(len(response_data) - 1)
+                        
+                        continue  # Skip the normal processing for this field
+                        
+                    except Exception as e:
+                        print(f"Error processing signature image: {e}")
+                        answer_text = "✍️ <font color='#dc2626'>[Error processing signature]</font>"
                 elif field.field_type == 'photo':
-                    answer_text = f"📷 <font color='#059669'>[Photo: {field_response.response_value}]</font>"
+                    # Process photo image
+                    try:
+                        if field_response.response_value.startswith('data:image'):
+                            # Extract base64 data from data URL
+                            base64_data = field_response.response_value.split(',')[1]
+                            image_data = base64.b64decode(base64_data)
+                            
+                            # Create PIL Image from bytes
+                            image_io = BytesIO(image_data)
+                            pil_image = PILImage.open(image_io)
+                            
+                            # Ensure image is in RGB mode
+                            if pil_image.mode != 'RGB':
+                                pil_image = pil_image.convert('RGB')
+                            
+                            # Save PIL image to BytesIO for ImageReader
+                            img_buffer = BytesIO()
+                            pil_image.save(img_buffer, format='PNG')
+                            img_buffer.seek(0)
+                            
+                            # Create ImageReader object
+                            image_reader = ImageReader(img_buffer)
+                            
+                            # Create ReportLab Image with size constraints
+                            photo_image = Image(image_reader, width=2*inch, height=1.5*inch)
+                            
+                            # Create a combined answer with text and image
+                            answer_paragraph = [
+                                Paragraph("📷 <font color='#059669'>[Photo]</font>", 
+                                        ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)),
+                                photo_image
+                            ]
+                            
+                            # Add this row with special handling for image
+                            question_paragraph = Paragraph(
+                                f"<b>{question_text}</b><br/>{field_type_badge}",
+                                ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
+                            )
+                            
+                            response_data.append([question_paragraph, answer_paragraph])
+                            
+                            # Track flagged rows if needed
+                            if is_flagged:
+                                flagged_rows.append(len(response_data) - 1)
+                            
+                            continue  # Skip the normal processing for this field
+                        else:
+                            answer_text = f"📷 <font color='#059669'>[Photo: {field_response.response_value}]</font>"
+                    except Exception as e:
+                        print(f"Error processing photo image: {e}")
+                        answer_text = f"📷 <font color='#dc2626'>[Error processing photo]</font>"
                 elif field.field_type == 'datetime':
                     answer_text = f"📅 {field_response.response_value}"
                 elif field.field_type == 'time':
@@ -1083,6 +1270,10 @@ async def export_inspection_to_pdf(
                 else:  # HOLD
                     status_indicator = f" <font color='#dc2626'><b>[❌ {status_value}]</b></font>"
                 answer_text += status_indicator if answer_text else status_indicator[1:]  # Remove leading space if no answer
+            
+            # Add flag indicator if flagged
+            if is_flagged:
+                answer_text += " <font color='#dc2626'><b>[🚩 FLAGGED]</b></font>"
         else:
             answer_text = "<font color='#9ca3af'>— No response provided —</font>"
         
@@ -1098,6 +1289,10 @@ async def export_inspection_to_pdf(
         )
         
         response_data.append([question_paragraph, answer_paragraph])
+        
+        # Track flagged rows (add 1 because header is row 0)
+        if is_flagged:
+            flagged_rows.append(len(response_data) - 1)
     
     # Create the enhanced table
     response_table = Table(response_data, colWidths=[3.2*inch, 3.3*inch])
@@ -1134,13 +1329,21 @@ async def export_inspection_to_pdf(
         
         # Alternating row colors for better readability
         *[('BACKGROUND', (1, i), (1, i), colors.HexColor('#ffffff') if i % 2 == 1 else colors.HexColor('#f9fafb'))
-          for i in range(1, len(response_data))],
+          for i in range(1, len(response_data)) if i not in flagged_rows],
         
-        # Special styling for rows with PASS/HOLD status
+        # Special styling for rows with PASS/HOLD status (non-flagged rows only)
         *[('BACKGROUND', (1, i), (1, i), colors.HexColor('#f0fdf4') if 'PASS' in str(response_data[i][1]) 
            else colors.HexColor('#fef2f2') if 'HOLD' in str(response_data[i][1]) 
            else colors.HexColor('#ffffff') if i % 2 == 1 else colors.HexColor('#f9fafb'))
-          for i in range(1, len(response_data))]
+          for i in range(1, len(response_data)) if i not in flagged_rows],
+        
+        # Red background for flagged abnormal data
+        *[('BACKGROUND', (0, i), (-1, i), colors.HexColor('#fee2e2'))  # Light red background
+          for i in flagged_rows],
+        *[('TEXTCOLOR', (0, i), (-1, i), colors.HexColor('#991b1b'))  # Dark red text
+          for i in flagged_rows],
+        *[('FONTNAME', (0, i), (-1, i), 'Helvetica-Bold')  # Bold text for flagged rows
+          for i in flagged_rows]
     ]))
     
     elements.append(response_table)
@@ -1162,6 +1365,7 @@ async def export_inspection_to_pdf(
     
     pass_count = len([r for r in inspection.responses if r.pass_hold_status and get_status_value(r) == 'pass'])
     hold_count = len([r for r in inspection.responses if r.pass_hold_status and get_status_value(r) == 'hold'])
+    flagged_count = len(flagged_rows)
     
     # Summary section
     summary_title = Paragraph("<b>📊 INSPECTION SUMMARY</b>", section_style)
@@ -1173,6 +1377,7 @@ async def export_inspection_to_pdf(
         ['✅ Completed Fields:', f"{answered_fields} ({completion_rate:.1f}%)"],
         ['🟢 Pass Count:', str(pass_count)],
         ['🔴 Hold Count:', str(hold_count)],
+        ['🚩 Flagged Abnormal:', str(flagged_count)],
         ['📊 Overall Status:', inspection.status.value.upper()]
     ]
     

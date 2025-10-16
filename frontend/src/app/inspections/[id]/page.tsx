@@ -97,13 +97,25 @@ export default function InspectionDetailPage() {
       <React.Fragment key={field.id}>
         <div className={`${depth === 0 ? 'bg-gray-50' : 'bg-white'} px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6`}>
           <dt className="text-sm font-medium text-gray-900">
-            {field.field_name}
-            {field.is_required && <span className="text-red-500 ml-1">*</span>}
-            {depth > 0 && (
-              <span className="ml-2 text-xs text-gray-500 italic">
-                (Level {depth + 1} Nested)
-              </span>
-            )}
+            <div className="flex items-center">
+              {field.field_name}
+              {field.is_required && <span className="text-red-500 ml-1">*</span>}
+              {response?.is_flagged && (
+                <div className="ml-2 flex items-center">
+                  <svg className="h-5 w-5 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  <span className="ml-1 text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded-full">
+                    FLAGGED
+                  </span>
+                </div>
+              )}
+              {depth > 0 && (
+                <span className="ml-2 text-xs text-gray-500 italic">
+                  (Level {depth + 1} Nested)
+                </span>
+              )}
+            </div>
             <div className="text-xs text-gray-800 mt-1">
               {fieldTypes.length > 1 ? (
                 <>Types: {fieldTypes.map((t: string) => t.charAt(0).toUpperCase() + t.slice(1).replace('_', ' ')).join(', ')}</>
@@ -117,14 +129,23 @@ export default function InspectionDetailPage() {
               {fieldTypes.map((fieldType: string, typeIndex: number) => {
                 if (fieldType === FieldType.MEASUREMENT) {
                   return (
-                    <div key={typeIndex} className={`border-l-2 ${colorScheme.border} pl-3`}>
+                    <div key={typeIndex} className={`border-l-2 ${response?.is_flagged ? 'border-red-500 bg-red-50' : colorScheme.border} pl-3 ${response?.is_flagged ? 'rounded-md p-2' : ''}`}>
                       {fieldTypes.length > 1 && (
                         <div className="text-xs font-semibold text-gray-700 mb-1">
                           {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
                         </div>
                       )}
-                      <div>Value: {response?.measurement_value ?? 'N/A'}</div>
-                      <div>Status: {response?.pass_hold_status ?? 'N/A'}</div>
+                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                        Value: {response?.measurement_value ?? 'N/A'}
+                      </div>
+                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                        Status: {response?.pass_hold_status ?? 'N/A'}
+                      </div>
+                      {response?.is_flagged && (
+                        <div className="mt-1 text-xs text-red-600 font-medium">
+                          ⚠️ This response has been flagged as abnormal
+                        </div>
+                      )}
                     </div>
                   );
                 } else if (fieldType === FieldType.PHOTO) {
@@ -204,24 +225,38 @@ export default function InspectionDetailPage() {
                   );
                 } else if (fieldType === FieldType.BUTTON) {
                   return (
-                    <div key={typeIndex} className={`border-l-2 ${colorScheme.border} pl-3`}>
+                    <div key={typeIndex} className={`border-l-2 ${response?.is_flagged ? 'border-red-500 bg-red-50' : colorScheme.border} pl-3 ${response?.is_flagged ? 'rounded-md p-2' : ''}`}>
                       {fieldTypes.length > 1 && (
                         <div className="text-xs font-semibold text-gray-700 mb-1">
                           {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
                         </div>
                       )}
-                      <div>Status: {response?.pass_hold_status ?? 'No selection'}</div>
+                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                        Status: {response?.pass_hold_status ?? 'No selection'}
+                      </div>
+                      {response?.is_flagged && (
+                        <div className="mt-1 text-xs text-red-600 font-medium">
+                          ⚠️ This response has been flagged as abnormal
+                        </div>
+                      )}
                     </div>
                   );
                 } else {
                   return (
-                    <div key={typeIndex} className={`border-l-2 ${colorScheme.border} pl-3`}>
+                    <div key={typeIndex} className={`border-l-2 ${response?.is_flagged ? 'border-red-500 bg-red-50' : colorScheme.border} pl-3 ${response?.is_flagged ? 'rounded-md p-2' : ''}`}>
                       {fieldTypes.length > 1 && (
                         <div className="text-xs font-semibold text-gray-700 mb-1">
                           {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
                         </div>
                       )}
-                      <div>{response?.response_value || 'No response'}</div>
+                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                        {response?.response_value || 'No response'}
+                      </div>
+                      {response?.is_flagged && (
+                        <div className="mt-1 text-xs text-red-600 font-medium">
+                          ⚠️ This response has been flagged as abnormal
+                        </div>
+                      )}
                     </div>
                   );
                 }

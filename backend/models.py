@@ -30,6 +30,7 @@ class FieldType(enum.Enum):
     date = "date"
     datetime = "datetime"
     time = "time"
+    subform = "subform"
 
 class MeasurementType(enum.Enum):
     between = "between"
@@ -94,6 +95,7 @@ class FormField(Base):
     measurement_max = Column(DECIMAL(10, 2))
     is_required = Column(Boolean, default=False)
     field_order = Column(Integer, nullable=False)
+    flag_conditions = Column(JSON)  # Flag condition settings for abnormal data detection
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships
@@ -131,6 +133,7 @@ class InspectionResponse(Base):
     response_value = Column(Text)
     measurement_value = Column(DECIMAL(10, 2))
     pass_hold_status = Column(String(10))  # Store as string: 'pass' or 'hold'
+    is_flagged = Column(Boolean, default=False)  # Flag for abnormal data detection
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships

@@ -2008,6 +2008,174 @@ function EditFormContent() {
                           </div>
                         )}
 
+                        {/* Flag Conditions Section - For Button, Dropdown, and Measurement fields */}
+                        {(field.field_type === FieldType.BUTTON || field.field_type === FieldType.DROPDOWN || field.field_type === FieldType.SEARCH_DROPDOWN || field.field_type === FieldType.MEASUREMENT || 
+                          field.field_types?.includes(FieldType.BUTTON) || field.field_types?.includes(FieldType.DROPDOWN) || field.field_types?.includes(FieldType.SEARCH_DROPDOWN) || field.field_types?.includes(FieldType.MEASUREMENT)) && (
+                        <div className="md:col-span-2 mt-4 pt-4 border-t border-gray-200">
+                          <div className="flex items-center justify-between mb-2">
+                            <label className="block text-xs font-medium text-gray-900">
+                              🚩 Flag Conditions (Mark as abnormal when...)
+                            </label>
+                          </div>
+                          <p className="text-xs text-gray-600 mb-3">
+                            💡 Set conditions to automatically flag abnormal data for admin review
+                          </p>
+                          
+                          <div className="space-y-3">
+                            {/* Button Field Flag Conditions */}
+                            {(field.field_type === FieldType.BUTTON || field.field_types?.includes(FieldType.BUTTON)) && (
+                              <div className="bg-red-50 p-3 rounded border border-red-200">
+                                <label className="block text-xs font-medium text-gray-900 mb-2">Flag when button value equals:</label>
+                                <div className="space-y-2">
+                                  {(field.field_options?.button_options || []).map((btn: any, btnIndex: number) => (
+                                    <label key={btnIndex} className="flex items-center space-x-2 text-xs">
+                                      <input
+                                        type="checkbox"
+                                        className="h-4 w-4 text-red-600 border-gray-300 rounded"
+                                        checked={(field.flag_conditions?.button_values || []).includes(btn.label)}
+                                        onChange={(e) => {
+                                          const currentValues = field.flag_conditions?.button_values || [];
+                                          const newValues = e.target.checked
+                                            ? [...currentValues, btn.label]
+                                            : currentValues.filter((v: string) => v !== btn.label);
+                                          updateField(index, {
+                                            flag_conditions: {
+                                              ...field.flag_conditions,
+                                              button_values: newValues
+                                            }
+                                          });
+                                        }}
+                                      />
+                                      <span className={`px-2 py-1 rounded text-white text-xs bg-${btn.color}-500`}>
+                                        {btn.label}
+                                      </span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Dropdown Field Flag Conditions */}
+                            {(field.field_type === FieldType.DROPDOWN || field.field_type === FieldType.SEARCH_DROPDOWN || 
+                              field.field_types?.includes(FieldType.DROPDOWN) || field.field_types?.includes(FieldType.SEARCH_DROPDOWN)) && (
+                              <div className="bg-red-50 p-3 rounded border border-red-200">
+                                <label className="block text-xs font-medium text-gray-900 mb-2">Flag when dropdown value equals:</label>
+                                <div className="space-y-2">
+                                  {(field.field_options?.options || []).map((option: string, optIndex: number) => (
+                                    <label key={optIndex} className="flex items-center space-x-2 text-xs">
+                                      <input
+                                        type="checkbox"
+                                        className="h-4 w-4 text-red-600 border-gray-300 rounded"
+                                        checked={(field.flag_conditions?.dropdown_values || []).includes(option)}
+                                        onChange={(e) => {
+                                          const currentValues = field.flag_conditions?.dropdown_values || [];
+                                          const newValues = e.target.checked
+                                            ? [...currentValues, option]
+                                            : currentValues.filter((v: string) => v !== option);
+                                          updateField(index, {
+                                            flag_conditions: {
+                                              ...field.flag_conditions,
+                                              dropdown_values: newValues
+                                            }
+                                          });
+                                        }}
+                                      />
+                                      <span>{option}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Measurement Field Flag Conditions */}
+                            {(field.field_type === FieldType.MEASUREMENT || field.field_types?.includes(FieldType.MEASUREMENT)) && (
+                              <div className="bg-red-50 p-3 rounded border border-red-200">
+                                <label className="block text-xs font-medium text-gray-900 mb-2">Flag when measurement is out of range:</label>
+                                
+                                {/* Option to use measurement settings */}
+                                <div className="mb-3">
+                                  <label className="flex items-center space-x-2">
+                                    <input
+                                      type="checkbox"
+                                      className="rounded border-gray-300"
+                                      checked={field.flag_conditions?.use_measurement_settings || false}
+                                      onChange={(e) => {
+                                        const useSettings = e.target.checked;
+                                        updateField(index, {
+                                          flag_conditions: {
+                                            ...field.flag_conditions,
+                                            use_measurement_settings: useSettings,
+                                            min_value: useSettings ? field.measurement_min : field.flag_conditions?.min_value,
+                                            max_value: useSettings ? field.measurement_max : field.flag_conditions?.max_value
+                                          }
+                                        });
+                                      }}
+                                    />
+                                    <span className="text-xs text-gray-700">
+                                      Use measurement settings from above (Min: {field.measurement_min || 'Not set'}, Max: {field.measurement_max || 'Not set'})
+                                    </span>
+                                  </label>
+                                </div>
+
+                                {/* Custom range inputs */}
+                                {!field.flag_conditions?.use_measurement_settings && (
+                                  <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">Minimum Value</label>
+                                      <input
+                                        type="number"
+                                        step="any"
+                                        className="w-full text-xs border border-gray-300 rounded px-2 py-1 text-gray-900"
+                                        placeholder="e.g., 0"
+                                        value={field.flag_conditions?.min_value || ''}
+                                        onChange={(e) => updateField(index, {
+                                          flag_conditions: {
+                                            ...field.flag_conditions,
+                                            min_value: e.target.value ? parseFloat(e.target.value) : undefined
+                                          }
+                                        })}
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">Maximum Value</label>
+                                      <input
+                                        type="number"
+                                        step="any"
+                                        className="w-full text-xs border border-gray-300 rounded px-2 py-1 text-gray-900"
+                                        placeholder="e.g., 100"
+                                        value={field.flag_conditions?.max_value || ''}
+                                        onChange={(e) => updateField(index, {
+                                          flag_conditions: {
+                                            ...field.flag_conditions,
+                                            max_value: e.target.value ? parseFloat(e.target.value) : undefined
+                                          }
+                                        })}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Show current values when using measurement settings */}
+                                {field.flag_conditions?.use_measurement_settings && (
+                                  <div className="bg-blue-50 p-2 rounded border border-blue-200">
+                                    <p className="text-xs text-blue-800">
+                                      <strong>Current flag range:</strong> Min: {field.measurement_min || 'Not set'}, Max: {field.measurement_max || 'Not set'}
+                                    </p>
+                                    <p className="text-xs text-blue-600 mt-1">
+                                      Values will be automatically updated when you change the measurement settings above.
+                                    </p>
+                                  </div>
+                                )}
+
+                                <p className="text-xs text-gray-600 mt-2">
+                                  Values outside this range will be flagged as abnormal
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        )}
+
                         {/* Conditional Logic Section - Only for Dropdown/Search Dropdown */}
                         {(field.field_type === FieldType.DROPDOWN || field.field_type === FieldType.SEARCH_DROPDOWN || field.field_types?.includes(FieldType.DROPDOWN) || field.field_types?.includes(FieldType.SEARCH_DROPDOWN)) && (
                         <div className="md:col-span-2 mt-4 pt-4 border-t border-gray-200">

@@ -81,6 +81,14 @@ export interface FormField {
   has_conditional?: boolean;
   conditional_rules?: ConditionalRule[];
   placeholder_text?: string;
+  flag_conditions?: {
+    dropdown_value?: string;
+    dropdown_values?: string[];
+    button_values?: string[];
+    min_value?: number;
+    max_value?: number;
+    use_measurement_settings?: boolean;
+  };
 }
 
 export interface Form {
@@ -101,6 +109,7 @@ export interface InspectionResponse {
   response_value?: string;
   measurement_value?: number;
   pass_hold_status?: PassHoldStatus;
+  is_flagged?: boolean;  // Flag for abnormal data detection
   created_at?: string;
 }
 

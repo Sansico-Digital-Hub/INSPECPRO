@@ -27,6 +27,7 @@ class FieldType(str, Enum):
     date = "date"
     datetime = "datetime"
     time = "time"
+    subform = "subform"
 
 class MeasurementType(str, Enum):
     between = "between"
@@ -97,6 +98,7 @@ class FormFieldBase(BaseModel):
     measurement_max: Optional[float] = None
     is_required: bool = False
     field_order: int
+    flag_conditions: Optional[Dict[str, Any]] = None  # Flag condition settings for abnormal data detection
 
 class FormFieldCreate(FormFieldBase):
     id: Optional[int] = None  # Optional ID for updates
@@ -138,6 +140,7 @@ class InspectionResponseBase(BaseModel):
     response_value: Optional[str] = None
     measurement_value: Optional[float] = None
     pass_hold_status: Optional[PassHoldStatus] = None
+    is_flagged: Optional[bool] = False  # Flag for abnormal data detection
 
 class InspectionResponseCreate(InspectionResponseBase):
     pass
@@ -160,6 +163,7 @@ class InspectionUpdate(BaseModel):
     status: Optional[InspectionStatus] = None
     rejection_reason: Optional[str] = None
     reviewer_signature: Optional[str] = None
+    responses: Optional[List[InspectionResponseCreate]] = None
 
 class InspectionResponse(InspectionBase):
     id: int
