@@ -39,7 +39,9 @@ from schemas import (
 )
 from auth import get_current_user, require_role
 from utils.flag_evaluator import evaluate_flag_conditions
+from utils.logging_config import get_logger, log_file_upload_event
 
+logger = get_logger(__name__)
 router = APIRouter()
 
 @router.get("/", response_model=List[InspectionResponseSchema])
@@ -587,9 +589,9 @@ async def create_inspection(
     for response_data in inspection.responses:
         # Handle conditional fields (field_id can be None)
         if response_data.field_id is None:
-            print(f"📝 Saving conditional field response: {response_data.response_value}")
+            logger.debug(f"Saving conditional field response: {response_data.response_value}")
         else:
-            print(f"📝 Saving field response for field_id {response_data.field_id}: {response_data.response_value}")
+            logger.debug(f"Saving field response for field_id {response_data.field_id}: {response_data.response_value}")
             
         # Normalize pass_hold_status to raw string value
         pass_hold_status = None
@@ -821,7 +823,10 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Upload file for inspection field"""
+    """Upload file for inspection field with security validation"""
+    # Import file validation utility
+    from utils.file_validation import FileValidator
+    
     inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
     if not inspection:
         raise HTTPException(
@@ -837,25 +842,59 @@ async def upload_file(
             detail="Not enough permissions"
         )
     
+    # SECURITY: Validate file before processing
+    # Define allowed file types based on file_type parameter
+    allowed_types = []
+    if file_type in ['image', 'photo']:
+        allowed_types = ['image']
+    elif file_type in ['document', 'report']:
+        allowed_types = ['document']
+    elif file_type in ['spreadsheet', 'data']:
+        allowed_types = ['spreadsheet']
+    else:
+        # Default to images and documents for inspection files
+        allowed_types = ['image', 'document']
+    
+    # Validate file with security checks
+    try:
+        file_metadata = await FileValidator.validate_upload_file(
+            file=file,
+            allowed_types=allowed_types,
+            max_size=10 * 1024 * 1024  # 10MB limit
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File validation failed: {str(e)}"
+        )
+    
     # Create uploads directory if it doesn't exist
     upload_dir = "uploads"
     os.makedirs(upload_dir, exist_ok=True)
     
-    # Generate unique filename
-    file_extension = os.path.splitext(file.filename)[1]
+    # Generate unique filename using sanitized name
+    file_extension = os.path.splitext(file_metadata['safe_filename'])[1]
     unique_filename = f"{uuid.uuid4()}{file_extension}"
     file_path = os.path.join(upload_dir, unique_filename)
     
-    # Save file
-    with open(file_path, "wb") as buffer:
-        content = await file.read()
-        buffer.write(content)
+    # Save file securely
+    try:
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save file"
+        )
     
-    # Save file info to database
+    # Save file info to database with security metadata
     db_file = InspectionFile(
         inspection_id=inspection_id,
         field_id=field_id,
-        file_name=file.filename,
+        file_name=file_metadata['safe_filename'],  # Use sanitized filename
         file_path=file_path,
         file_type=file_type
     )
@@ -863,7 +902,13 @@ async def upload_file(
     db.add(db_file)
     db.commit()
     
-    return {"message": "File uploaded successfully", "file_id": db_file.id}
+    return {
+        "message": "File uploaded successfully", 
+        "file_id": db_file.id,
+        "original_filename": file_metadata['original_filename'],
+        "safe_filename": file_metadata['safe_filename'],
+        "file_hash": file_metadata['hash']
+    }
 
 @router.get("/{inspection_id}/export-pdf")
 async def export_inspection_to_pdf(
@@ -1188,7 +1233,7 @@ async def export_inspection_to_pdf(
                         continue  # Skip the normal processing for this field
                         
                     except Exception as e:
-                        print(f"Error processing signature image: {e}")
+                        logger.error(f"Error processing signature image for field {field.id}: {e}")
                         answer_text = "✍️ <font color='#dc2626'>[Error processing signature]</font>"
                 elif field.field_type == 'photo':
                     # Process photo image
@@ -1240,7 +1285,7 @@ async def export_inspection_to_pdf(
                         else:
                             answer_text = f"📷 <font color='#059669'>[Photo: {field_response.response_value}]</font>"
                     except Exception as e:
-                        print(f"Error processing photo image: {e}")
+                        logger.error(f"Error processing photo image for field {field.id}: {e}")
                         answer_text = f"📷 <font color='#dc2626'>[Error processing photo]</font>"
                 elif field.field_type == 'datetime':
                     answer_text = f"📅 {field_response.response_value}"

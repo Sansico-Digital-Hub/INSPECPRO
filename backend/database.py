@@ -4,7 +4,9 @@ from sqlalchemy.orm import sessionmaker
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load environment variables
+load_dotenv()  # Load main .env file
+load_dotenv('.env.email')  # Load email configuration if exists
 
 # MySQL Database Configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://root:Databaseya789@localhost:3306/inspecpro")

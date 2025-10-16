@@ -7,6 +7,9 @@ import re
 from database import get_db
 from models import Inspection, InspectionResponse, FormField, Form
 from auth import get_current_user, User
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -32,9 +35,8 @@ def generate_doc_number(form_id: int, db: Session) -> str:
     # Get current year
     current_year = datetime.now().year
     
-    print(f"🔢 Generating doc number for form: {form.form_name}")
-    print(f"📝 Abbreviation: {abbr}")
-    print(f"📅 Year: {current_year}")
+    logger.info(f"Generating doc number for form: {form.form_name} (ID: {form_id})")
+    logger.debug(f"Abbreviation: {abbr}, Year: {current_year}")
     
     # Find the last doc number for this form in current year
     # Query all inspections for this form
@@ -45,7 +47,7 @@ def generate_doc_number(form_id: int, db: Session) -> str:
     max_number = 0
     prefix = f"{abbr}-{current_year}"
     
-    print(f"🔍 Looking for doc numbers with prefix: {prefix}")
+    logger.debug(f"Looking for doc numbers with prefix: {prefix}")
     
     # Check all responses for No Doc fields
     found_doc_numbers = []
@@ -71,24 +73,23 @@ def generate_doc_number(form_id: int, db: Session) -> str:
                     tail = number_part or "0"
                     # Allow leading zeros
                     sequence_number = int(tail)
-                    print(f"  📄 Found: {response.response_value} -> seq: {sequence_number}")
+                    logger.debug(f"Found doc number: {response.response_value} -> sequence: {sequence_number}")
                     
                     if sequence_number > max_number:
                         max_number = sequence_number
-                        print(f"    ✅ New max: {max_number}")
+                        logger.debug(f"New max sequence: {max_number}")
                 except Exception as e:
-                    print(f"    ❌ Error parsing: {e}")
+                    logger.warning(f"Error parsing doc number {response.response_value}: {e}")
                     pass
     
-    print(f"📊 Found {len(found_doc_numbers)} existing doc numbers: {found_doc_numbers}")
-    print(f"🔢 Max sequence number: {max_number}")
+    logger.debug(f"Found {len(found_doc_numbers)} existing doc numbers, max sequence: {max_number}")
     
     # Generate next number
     next_number = max_number + 1
     # New format without zero padding: ABBR-YYYYN
     doc_number = f"{abbr}-{current_year}{next_number}"
     
-    print(f"✅ Generated doc number: {doc_number}")
+    logger.info(f"Generated doc number: {doc_number} for form {form.form_name}")
     
     return doc_number
 

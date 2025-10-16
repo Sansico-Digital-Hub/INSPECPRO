@@ -4,6 +4,14 @@ const nextConfig = {
   experimental: {
     optimizePackageImports: ['react-hot-toast'],
   },
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: 'http://localhost:8000/api/:path*',
+      },
+    ];
+  },
   async headers() {
     return [
       {

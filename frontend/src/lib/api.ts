@@ -197,4 +197,12 @@ export const analyticsAPI = {
   },
 };
 
+// Doc Numbers APIs
+export const docNumbersAPI = {
+  getNextDocNumber: async (formId: number): Promise<{ doc_number: string }> => {
+    const response = await api.get<{ doc_number: string }>(`/api/doc-numbers/forms/${formId}/next-doc-number`);
+    return response.data;
+  },
+};
+
 export default api;

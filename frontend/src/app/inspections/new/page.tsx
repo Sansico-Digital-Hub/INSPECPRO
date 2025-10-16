@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
-import { formsAPI, inspectionsAPI } from '@/lib/api';
+import { formsAPI, inspectionsAPI, docNumbersAPI } from '@/lib/api';
 import { Form, FormField, FieldType, InspectionResponse, PassHoldStatus, UserRole, MeasurementType } from '@/types';
 import toast from 'react-hot-toast';
 import SignatureCanvas from 'react-signature-canvas';
@@ -133,12 +133,7 @@ export default function NewInspectionPage() {
     
     if (docField) {
       try {
-        const response = await fetch(`http://localhost:8000/api/doc-numbers/forms/${form.id}/next-doc-number`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          }
-        });
-        const data = await response.json();
+        const data = await docNumbersAPI.getNextDocNumber(form.id);
         docNumber = data.doc_number;
       } catch (error) {
         console.error('Failed to fetch doc number:', error);

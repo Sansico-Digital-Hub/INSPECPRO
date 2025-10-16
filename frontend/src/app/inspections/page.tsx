@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { inspectionsAPI } from '@/lib/api';
-import { Inspection, InspectionStatus, UserRole } from '@/types';
+import { inspectionsAPI, formsAPI } from '@/lib/api';
+import { Inspection, InspectionStatus, UserRole, Form } from '@/types';
 import { PlusIcon, EyeIcon, PencilIcon, TrashIcon, CheckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowDownTrayIcon, DocumentArrowDownIcon, CalendarIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import Sidebar from '@/components/Sidebar';
@@ -22,7 +22,8 @@ function InspectionsContent() {
   const [inspections, setInspections] = useState<Inspection[]>([]);
   const [filteredInspections, setFilteredInspections] = useState<Inspection[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<InspectionStatus | 'all'>('all');
+  const [forms, setForms] = useState<Form[]>([]);
+  const [formFilter, setFormFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showRejectModal, setShowRejectModal] = useState<number | null>(null);
   const [showAcceptModal, setShowAcceptModal] = useState<number | null>(null);
@@ -31,16 +32,36 @@ function InspectionsContent() {
   const [endDate, setEndDate] = useState<Date | null>(null);
 
   useEffect(() => {
+    fetchForms();
     fetchInspections();
-  }, [statusFilter]);
+  }, []);
+
+  useEffect(() => {
+    fetchInspections();
+  }, [formFilter]);
+
+  const fetchForms = async () => {
+    try {
+      const data = await formsAPI.getForms();
+      setForms(data);
+    } catch (error) {
+      console.error('Failed to fetch forms:', error);
+      toast.error('Failed to fetch forms');
+    }
+  };
 
   const fetchInspections = async () => {
     try {
-      const data = await inspectionsAPI.getInspections({
-        status_filter: statusFilter === 'all' ? undefined : statusFilter
-      });
-      setInspections(data);
-      setFilteredInspections(data);
+      const data = await inspectionsAPI.getInspections();
+      
+      // Filter by form if a specific form is selected
+      let filteredData = data;
+      if (formFilter !== 'all') {
+        filteredData = data.filter(inspection => inspection.form_id === parseInt(formFilter));
+      }
+      
+      setInspections(filteredData);
+      setFilteredInspections(filteredData);
     } catch (error) {
       console.error('Failed to fetch inspections:', error);
       toast.error('Failed to fetch inspections');
@@ -117,8 +138,8 @@ function InspectionsContent() {
         params.end_date = endDate.toISOString().split('T')[0];
       }
       
-      if (statusFilter !== 'all') {
-        params.status_filter = statusFilter;
+      if (formFilter !== 'all') {
+        params.form_id = formFilter;
       }
       
       await inspectionsAPI.exportToExcel(params);
@@ -157,7 +178,7 @@ function InspectionsContent() {
       <main className={`flex-1 transition-all duration-300 p-6 ${isCollapsed ? 'ml-20' : 'ml-64'}`}>
         <div className="px-4 py-6 sm:px-0">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">
+            <h2 className="text-2xl font-bold text-black">
               {user?.role === UserRole.USER ? 'My Inspections' : 'All Inspections'}
             </h2>
             <div className="flex gap-3">
@@ -189,22 +210,23 @@ function InspectionsContent() {
                 </div>
                 <input
                   type="text"
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm text-black"
                   placeholder="Search by ID, Form ID, Inspector ID, or Status..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
               <select
-                className="border border-gray-300 rounded-md px-3 py-2"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as InspectionStatus | 'all')}
+                className="border border-gray-300 rounded-md px-3 py-2 text-black"
+                value={formFilter}
+                onChange={(e) => setFormFilter(e.target.value)}
               >
-                <option value="all">All Status</option>
-                <option value={InspectionStatus.DRAFT}>Draft</option>
-                <option value={InspectionStatus.SUBMITTED}>Submitted</option>
-                <option value={InspectionStatus.ACCEPTED}>Accepted</option>
-                <option value={InspectionStatus.REJECTED}>Rejected</option>
+                <option value="all">All Forms</option>
+                {forms.map((form) => (
+                  <option key={form.id} value={form.id}>
+                    {form.form_name}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
@@ -212,7 +234,7 @@ function InspectionsContent() {
           {loading ? (
             <div className="text-center py-12">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-              <p className="mt-4 text-gray-800">Loading inspections...</p>
+              <p className="mt-4 text-black">Loading inspections...</p>
             </div>
           ) : (
             <div className="bg-white shadow overflow-hidden sm:rounded-md">
@@ -223,24 +245,24 @@ function InspectionsContent() {
                       <div className="flex items-center">
                         <div className="flex-shrink-0">
                           <div className="h-10 w-10 rounded-full bg-gray-300 flex items-center justify-center">
-                            <span className="text-sm font-medium text-gray-900">
+                            <span className="text-sm font-medium text-black">
                               #{inspection.id}
                             </span>
                           </div>
                         </div>
                         <div className="ml-4">
                           <div className="flex items-center">
-                            <div className="text-sm font-medium text-gray-900">
+                            <div className="text-sm font-medium text-black">
                               Inspection #{inspection.id}
                             </div>
                             <span className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(inspection.status)}`}>
                               {inspection.status}
                             </span>
                           </div>
-                          <div className="text-sm text-gray-900">
+                          <div className="text-sm text-black">
                             Form ID: {inspection.form_id} | Inspector ID: {inspection.inspector_id}
                           </div>
-                          <div className="text-sm text-gray-900">
+                          <div className="text-sm text-black">
                             Created: {new Date(inspection.created_at).toLocaleDateString()}
                             {inspection.reviewed_at && (
                               <span> | Reviewed: {new Date(inspection.reviewed_at).toLocaleDateString()}</span>
@@ -318,11 +340,11 @@ function InspectionsContent() {
 
           {filteredInspections.length === 0 && !loading && (
             <div className="text-center py-12">
-              <svg className="mx-auto h-12 w-12 text-gray-900" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="mx-auto h-12 w-12 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              <h3 className="mt-2 text-sm font-medium text-gray-900">No inspections</h3>
-              <p className="mt-1 text-sm text-gray-900">
+              <h3 className="mt-2 text-sm font-medium text-black">No inspections</h3>
+              <p className="mt-1 text-sm text-black">
                 {user?.role === UserRole.USER 
                   ? 'Get started by creating your first inspection.' 
                   : 'No inspections found with the current filter.'}
@@ -373,8 +395,9 @@ function InspectionsContent() {
           endDate={endDate}
           setStartDate={setStartDate}
           setEndDate={setEndDate}
-          statusFilter={statusFilter}
-          setStatusFilter={setStatusFilter}
+          formFilter={formFilter}
+          setFormFilter={setFormFilter}
+          forms={forms}
         />
       )}
     </>
@@ -420,7 +443,7 @@ function AcceptModal({
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
       <div className="relative top-20 mx-auto p-5 border w-[500px] shadow-lg rounded-md bg-white">
         <div className="mt-3">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">Accept Inspection</h3>
+          <h3 className="text-lg font-medium text-black mb-4">Accept Inspection</h3>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="bg-green-50 border border-green-200 rounded-md p-4">
               <p className="text-sm text-green-800">
@@ -429,7 +452,7 @@ function AcceptModal({
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">Reviewer Signature *</label>
+              <label className="block text-sm font-medium text-black mb-2">Reviewer Signature *</label>
               <div className="border-2 border-gray-300 rounded-md">
                 <SignatureCanvas
                   ref={signatureRef}
@@ -451,7 +474,7 @@ function AcceptModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 text-sm font-medium text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-md"
+                className="px-4 py-2 text-sm font-medium text-black bg-gray-100 hover:bg-gray-200 rounded-md"
               >
                 Cancel
               </button>
@@ -476,8 +499,9 @@ function ExportExcelModal({
   endDate,
   setStartDate,
   setEndDate,
-  statusFilter,
-  setStatusFilter
+  formFilter,
+  setFormFilter,
+  forms
 }: {
   onClose: () => void;
   onExport: () => void;
@@ -485,14 +509,15 @@ function ExportExcelModal({
   endDate: Date | null;
   setStartDate: (date: Date | null) => void;
   setEndDate: (date: Date | null) => void;
-  statusFilter: InspectionStatus | 'all';
-  setStatusFilter: (status: InspectionStatus | 'all') => void;
+  formFilter: string;
+  setFormFilter: (formId: string) => void;
+  forms: Form[];
 }) {
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
       <div className="relative top-20 mx-auto p-5 border w-[600px] shadow-lg rounded-md bg-white">
         <div className="mt-3">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">Export Inspections to Excel</h3>
+          <h3 className="text-lg font-medium text-black mb-4">Export Inspections to Excel</h3>
           <div className="space-y-4">
             <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
               <p className="text-sm text-blue-800">
@@ -541,18 +566,19 @@ function ExportExcelModal({
 
             <div>
               <label className="block text-sm font-medium text-black mb-2">
-                Status Filter
+                Form Filter
               </label>
               <select
                 className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as InspectionStatus | 'all')}
+                value={formFilter}
+                onChange={(e) => setFormFilter(e.target.value)}
               >
-                <option value="all">All Status</option>
-                <option value={InspectionStatus.DRAFT}>Draft</option>
-                <option value={InspectionStatus.SUBMITTED}>Submitted</option>
-                <option value={InspectionStatus.ACCEPTED}>Accepted</option>
-                <option value={InspectionStatus.REJECTED}>Rejected</option>
+                <option value="all">All Forms</option>
+                {forms.map((form) => (
+                  <option key={form.id} value={form.id}>
+                    {form.form_name}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -560,7 +586,7 @@ function ExportExcelModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 text-sm font-medium text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-md"
+                className="px-4 py-2 text-sm font-medium text-black bg-gray-100 hover:bg-gray-200 rounded-md"
               >
                 Cancel
               </button>
@@ -612,10 +638,10 @@ function RejectModal({
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
       <div className="relative top-10 mx-auto p-5 border w-[600px] shadow-lg rounded-md bg-white">
         <div className="mt-3">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">Reject Inspection</h3>
+          <h3 className="text-lg font-medium text-black mb-4">Reject Inspection</h3>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-900">Rejection Reason *</label>
+              <label className="block text-sm font-medium text-black">Rejection Reason *</label>
               <textarea
                 required
                 className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2"
@@ -627,7 +653,7 @@ function RejectModal({
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">Reviewer Signature *</label>
+              <label className="block text-sm font-medium text-black mb-2">Reviewer Signature *</label>
               <div className="border-2 border-gray-300 rounded-md">
                 <SignatureCanvas
                   ref={signatureRef}
@@ -649,7 +675,7 @@ function RejectModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 text-sm font-medium text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-md"
+                className="px-4 py-2 text-sm font-medium text-black bg-gray-100 hover:bg-gray-200 rounded-md"
               >
                 Cancel
               </button>

@@ -7,6 +7,9 @@ defined by administrators for marking abnormal data.
 from typing import Dict, Any, Optional, List
 from decimal import Decimal
 from schemas import FieldType
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class FlagEvaluator:
@@ -49,7 +52,7 @@ class FlagEvaluator:
                 
         except Exception as e:
             # Log error but don't flag on evaluation errors
-            print(f"Error evaluating flag condition: {e}")
+            logger.error(f"Error evaluating flag condition for field type {field_type}: {e}")
             return False
     
     @staticmethod
