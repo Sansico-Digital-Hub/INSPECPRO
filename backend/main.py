@@ -37,9 +37,9 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # CORS middleware - Environment-based configuration for security
 # Development origins
 dev_origins = [
-    "http://localhost:3000",
+    "http://localhost:3002",
     "http://localhost:3001", 
-    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3002",
     "http://127.0.0.1:3001"
 ]
 
@@ -79,4 +79,4 @@ async def health_check():
     return {"status": "healthy"}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8004, reload=True)

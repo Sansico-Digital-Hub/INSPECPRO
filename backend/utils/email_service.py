@@ -201,7 +201,7 @@ class EmailService:
         """Send password reset email."""
         try:
             # Create reset URL (you may need to adjust this based on your frontend URL)
-            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3002')
             reset_url = f"{frontend_url}/reset-password?token={reset_token}"
             
             subject = "InsPecPro - Password Reset Request"
