@@ -44,7 +44,7 @@ echo ========================================
 echo InsPecPro Application is starting...
 echo ========================================
 echo.
-echo Backend: Running on http://localhost:8004
+echo Backend: Running on http://localhost:8000
 echo Frontend: Running on http://localhost:3002
 echo.
 echo Both servers are starting in separate windows.

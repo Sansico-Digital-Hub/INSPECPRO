@@ -21,7 +21,7 @@ File batch ini dibuat untuk mempermudah pengelolaan aplikasi InsPecPro.
   - Menjalankan backend server (Python) di terminal terpisah
   - Menjalankan frontend server (Node.js) di terminal terpisah
 - Server akan berjalan di:
-  - Backend: http://localhost:8004
+  - Backend: http://localhost:8000
   - Frontend: http://localhost:3002
 
 ### 3. `stop-all.bat`

@@ -16,8 +16,8 @@ async def get_users(
     current_user: User = Depends(require_role(["admin"])),
     db: Session = Depends(get_db)
 ):
-    """Get all users (Admin only)"""
-    users = db.query(User).offset(skip).limit(limit).all()
+    """Get all active users (Admin only)"""
+    users = db.query(User).filter(User.is_active == True).offset(skip).limit(limit).all()
     return users
 
 @router.get("/{user_id}", response_model=UserResponse)
@@ -35,7 +35,7 @@ async def get_user(
             detail="Not enough permissions"
         )
     
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -96,7 +96,7 @@ async def update_user(
             detail="Not enough permissions"
         )
     
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -125,6 +125,12 @@ async def delete_user(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
+        )
+    
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already deleted"
         )
     
     # Soft delete by setting is_active to False
