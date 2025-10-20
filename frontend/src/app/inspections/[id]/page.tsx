@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { inspectionsAPI, formsAPI } from '@/lib/api';
 import { Inspection, Form, InspectionStatus, UserRole, FieldType } from '@/types';
-import { ArrowLeftIcon, CheckIcon, XMarkIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, CheckIcon, XMarkIcon, ArrowDownTrayIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
 export default function InspectionDetailPage() {
@@ -347,9 +347,17 @@ export default function InspectionDetailPage() {
             
             <div className="flex justify-between items-start">
               <div>
-                <h2 className="text-2xl font-bold text-gray-900">
-                  Inspection #{inspection.id}
-                </h2>
+                <div className="flex items-center">
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    Inspection #{inspection.id}
+                  </h2>
+                  {inspection.has_flags && (
+                    <ExclamationTriangleIcon 
+                      className="h-6 w-6 text-amber-500 ml-3" 
+                      title="Warning: This inspection has flagged responses"
+                    />
+                  )}
+                </div>
                 <p className="text-gray-800 mt-1">Form: {form.form_name}</p>
                 <p className="text-gray-800">Created: {new Date(inspection.created_at).toLocaleString()}</p>
                 {inspection.reviewed_at && (

@@ -125,6 +125,7 @@ export interface Inspection {
   created_at: string;
   updated_at: string;
   responses: InspectionResponse[];
+  has_flags?: boolean;  // Indicates if inspection has any flagged responses
 }
 
 export interface DashboardStats {

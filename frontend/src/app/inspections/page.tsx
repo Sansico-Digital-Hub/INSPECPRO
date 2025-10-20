@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { inspectionsAPI, formsAPI } from '@/lib/api';
 import { Inspection, InspectionStatus, UserRole, Form } from '@/types';
-import { PlusIcon, EyeIcon, PencilIcon, TrashIcon, CheckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowDownTrayIcon, DocumentArrowDownIcon, CalendarIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, EyeIcon, PencilIcon, TrashIcon, CheckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowDownTrayIcon, DocumentArrowDownIcon, CalendarIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import Sidebar from '@/components/Sidebar';
 import { useSidebar } from '@/contexts/SidebarContext';
@@ -255,6 +255,12 @@ function InspectionsContent() {
                             <div className="text-sm font-medium text-black">
                               Inspection #{inspection.id}
                             </div>
+                            {inspection.has_flags && (
+                              <ExclamationTriangleIcon 
+                                className="h-5 w-5 text-amber-500 ml-2" 
+                                title="Warning: This inspection has flagged responses"
+                              />
+                            )}
                             <span className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(inspection.status)}`}>
                               {inspection.status}
                             </span>
