@@ -9,7 +9,7 @@ from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image, KeepTogether
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 from reportlab.lib.utils import ImageReader
 from io import BytesIO
@@ -27,6 +27,7 @@ from models import (
     InspectionFile,
     Form,
     FormField,
+    FieldType,
     InspectionStatus as ModelInspectionStatus,
     PassHoldStatus as ModelPassHoldStatus,
 )
@@ -1044,21 +1045,55 @@ async def export_inspection_to_pdf(
     elements.append(Spacer(1, 16))
     
     # Enhanced Inspection Info Section
-    info_section = Paragraph("<b>📊 INSPECTION DETAILS</b>", section_style)
+    info_section = Paragraph("<b>INSPECTION DETAILS</b>", section_style)
     elements.append(info_section)
     elements.append(Spacer(1, 8))
     
-    # Status indicator with color coding
-    status_color = colors.HexColor('#059669') if inspection.status.value == 'approved' else \
-                   colors.HexColor('#dc2626') if inspection.status.value == 'rejected' else \
-                   colors.HexColor('#d97706')
+    # Status indicator with black text for better visibility
+    status_color = colors.black
     
-    status_indicator = f"🔍 {inspection.status.value.upper()}"
+    status_indicator = f"{inspection.status.value.upper()}"
+    
+    # Calculate flag summary for inspection details
+    flag_summary = {"flagged_count": 0, "total_responses": 0, "pass_count": 0, "hold_count": 0}
+    responses_map = {resp.field_id: resp for resp in inspection.responses}
+    
+    # Import flag evaluator
+    from utils.flag_evaluator import FlagEvaluator
+    
+    for field in form.fields:
+        field_response = responses_map.get(field.id)
+        if field_response:
+            flag_summary["total_responses"] += 1
+            
+            # Check if flagged
+            if field.flag_conditions:
+                is_flagged = FlagEvaluator.evaluate_field_response(
+                    field_type=field.field_type,
+                    response_value=field_response.response_value,
+                    measurement_value=field_response.measurement_value,
+                    flag_conditions=field.flag_conditions
+                )
+                if is_flagged:
+                    flag_summary["flagged_count"] += 1
+            
+            # Count pass/hold status
+            if field_response.pass_hold_status:
+                status_value = field_response.pass_hold_status.value if hasattr(field_response.pass_hold_status, 'value') else str(field_response.pass_hold_status)
+                if status_value.upper() == 'PASS':
+                    flag_summary["pass_count"] += 1
+                elif status_value.upper() == 'HOLD':
+                    flag_summary["hold_count"] += 1
+    
+    # Determine overall flag status
+    overall_flag = "🚩 FLAGGED" if flag_summary["flagged_count"] > 0 else "✅ CLEAR"
+    flag_color = colors.HexColor('#dc2626') if flag_summary["flagged_count"] > 0 else colors.HexColor('#059669')
     
     info_data = [
         ['🆔 Inspection ID:', str(inspection.id)],
         ['📋 Form:', form.form_name],
         ['👤 Inspector:', inspector.username if inspector else 'N/A'],
+        ['🚩 Flag Status:', overall_flag],
         ['📊 Status:', status_indicator],
         ['📅 Created:', inspection.created_at.strftime('%Y-%m-%d %H:%M:%S')],
         ['🔄 Updated:', inspection.updated_at.strftime('%Y-%m-%d %H:%M:%S')]
@@ -1087,10 +1122,15 @@ async def export_inspection_to_pdf(
         ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
         ('FONTSIZE', (1, 0), (1, -1), 10),
         
-        # Status row special styling
-        ('BACKGROUND', (1, 3), (1, 3), status_color),
+        # Flag status row special styling
+        ('BACKGROUND', (1, 3), (1, 3), flag_color),
         ('TEXTCOLOR', (1, 3), (1, 3), colors.white),
         ('FONTNAME', (1, 3), (1, 3), 'Helvetica-Bold'),
+        
+        # Status row special styling
+        ('BACKGROUND', (1, 4), (1, 4), colors.HexColor('#f8fafc')),
+        ('TEXTCOLOR', (1, 4), (1, 4), colors.black),
+        ('FONTNAME', (1, 4), (1, 4), 'Helvetica-Bold'),
         
         # General styling
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
@@ -1110,7 +1150,7 @@ async def export_inspection_to_pdf(
     elements.append(Spacer(1, 24))
     
     # Enhanced Responses Section
-    responses_title = Paragraph("<b>📝 INSPECTION RESPONSES</b>", section_style)
+    responses_title = Paragraph("<b>INSPECTION RESPONSES</b>", section_style)
     elements.append(responses_title)
     elements.append(Spacer(1, 12))
     
@@ -1158,15 +1198,12 @@ async def export_inspection_to_pdf(
     
     for field in sorted_fields:
         field_response = responses_map.get(field.id)
+        logger.info(f"Processing field {field.id}: {field.field_name} ({field.field_type})")
         
-        # Enhanced question formatting with icons
-        field_icon = field_icons.get(field.field_type, '📋')
-        question_text = f"{field_icon} {field.field_name}"
+        # Simplified question formatting
+        question_text = field.field_name
         if field.is_required:
             question_text += " <font color='red'>*</font>"
-        
-        # Field type badge
-        field_type_badge = f"<font size=8 color='#6b7280'>[{field.field_type.value.upper()}]</font>"
         
         # Enhanced answer formatting with status indicators
         answer_text = ""
@@ -1220,7 +1257,7 @@ async def export_inspection_to_pdf(
                         
                         # Add this row with special handling for image
                         question_paragraph = Paragraph(
-                            f"<b>{question_text}</b><br/>{field_type_badge}",
+                            f"<b>{question_text}</b>",
                             ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
                         )
                         
@@ -1235,58 +1272,84 @@ async def export_inspection_to_pdf(
                     except Exception as e:
                         logger.error(f"Error processing signature image for field {field.id}: {e}")
                         answer_text = "✍️ <font color='#dc2626'>[Error processing signature]</font>"
-                elif field.field_type == 'photo':
-                    # Process photo image
+                elif field.field_type == FieldType.photo:
                     try:
-                        if field_response.response_value.startswith('data:image'):
-                            # Extract base64 data from data URL
-                            base64_data = field_response.response_value.split(',')[1]
+                        if field_response.response_value:
+                            logger.info(f"Processing photo for field {field.id}: Starting photo processing")
+                            
+                            # Clean and decode base64 image
+                            base64_data = field_response.response_value
+                            logger.info(f"Processing photo for field {field.id}: Got base64 data, length: {len(base64_data)}")
+                            
+                            # Remove data URL prefix if present
+                            if base64_data.startswith('data:image'):
+                                base64_data = base64_data.split(',')[1]
+                                logger.info(f"Processing photo for field {field.id}: Removed data URL prefix")
+                            
+                            # Add padding if necessary
+                            missing_padding = len(base64_data) % 4
+                            if missing_padding:
+                                base64_data += '=' * (4 - missing_padding)
+                                logger.info(f"Processing photo for field {field.id}: Added padding")
+                            
                             image_data = base64.b64decode(base64_data)
+                            logger.info(f"Processing photo for field {field.id}: Decoded base64, image size: {len(image_data)} bytes")
                             
-                            # Create PIL Image from bytes
-                            image_io = BytesIO(image_data)
-                            pil_image = PILImage.open(image_io)
+                            image_buffer = BytesIO(image_data)
+                            logger.info(f"Processing photo for field {field.id}: Created BytesIO buffer")
                             
-                            # Ensure image is in RGB mode
-                            if pil_image.mode != 'RGB':
-                                pil_image = pil_image.convert('RGB')
+                            # Open and resize image to fit in PDF
+                            pil_image = PILImage.open(image_buffer)
+                            logger.info(f"Processing photo for field {field.id}: Opened PIL image, size: {pil_image.size}")
                             
-                            # Save PIL image to BytesIO for ImageReader
-                            img_buffer = BytesIO()
-                            pil_image.save(img_buffer, format='PNG')
-                            img_buffer.seek(0)
+                            # Calculate size to fit within constraints (max 200x150 points)
+                            max_width = 200
+                            max_height = 150
                             
-                            # Create ImageReader object
-                            image_reader = ImageReader(img_buffer)
+                            # Calculate aspect ratio
+                            aspect_ratio = pil_image.width / pil_image.height
                             
-                            # Create ReportLab Image with size constraints
-                            photo_image = Image(image_reader, width=2*inch, height=1.5*inch)
+                            if aspect_ratio > max_width / max_height:
+                                # Width is the limiting factor
+                                new_width = max_width
+                                new_height = max_width / aspect_ratio
+                            else:
+                                # Height is the limiting factor
+                                new_height = max_height
+                                new_width = max_height * aspect_ratio
                             
-                            # Create a combined answer with text and image
-                            answer_paragraph = [
-                                Paragraph("📷 <font color='#059669'>[Photo]</font>", 
-                                        ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)),
-                                photo_image
-                            ]
+                            logger.info(f"Processing photo for field {field.id}: Calculated new size: {new_width}x{new_height}")
                             
-                            # Add this row with special handling for image
-                            question_paragraph = Paragraph(
-                                f"<b>{question_text}</b><br/>{field_type_badge}",
-                                ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
-                            )
+                            # Resize image
+                            resized_image = pil_image.resize((int(new_width * 2), int(new_height * 2)), PILImage.Resampling.LANCZOS)
+                            logger.info(f"Processing photo for field {field.id}: Resized image")
                             
-                            response_data.append([question_paragraph, answer_paragraph])
+                            # Convert back to bytes
+                            resized_buffer = BytesIO()
+                            resized_image.save(resized_buffer, format='JPEG', quality=85)
+                            resized_buffer.seek(0)
+                            logger.info(f"Processing photo for field {field.id}: Saved resized image to buffer")
                             
-                            # Track flagged rows if needed
-                            if is_flagged:
-                                flagged_rows.append(len(response_data) - 1)
+                            # Create ReportLab Image directly from buffer without ImageReader
+                            # Reset buffer position
+                            resized_buffer.seek(0)
+                            logger.info(f"Processing photo for field {field.id}: Using buffer directly for Image")
                             
-                            continue  # Skip the normal processing for this field
+                            # Create Image directly from BytesIO buffer
+                            photo_image = Image(resized_buffer, width=new_width, height=new_height)
+                            logger.info(f"Processing photo for field {field.id}: Created ReportLab Image")
+                            
+                            # Use image directly without KeepTogether to avoid layout issues
+                            answer_text = photo_image
+                            logger.info(f"Processing photo for field {field.id}: Using image directly")
                         else:
-                            answer_text = f"📷 <font color='#059669'>[Photo: {field_response.response_value}]</font>"
+                            answer_text = "📷 <font color='#dc2626'>[No photo provided]</font>"
                     except Exception as e:
-                        logger.error(f"Error processing photo image for field {field.id}: {e}")
-                        answer_text = f"📷 <font color='#dc2626'>[Error processing photo]</font>"
+                        logger.error(f"Error processing photo for field {field.id}: {e}")
+                        logger.error(f"Error type: {type(e).__name__}")
+                        import traceback
+                        logger.error(f"Traceback: {traceback.format_exc()}")
+                        answer_text = "📷 <font color='#dc2626'>[Error processing photo]</font>"
                 elif field.field_type == 'datetime':
                     answer_text = f"📅 {field_response.response_value}"
                 elif field.field_type == 'time':
@@ -1303,6 +1366,9 @@ async def export_inspection_to_pdf(
                     unit = f" {field.field_options['unit']}"
                 answer_text = f"📏 {field_response.measurement_value}{unit}"
             
+            # Handle status indicators differently for KeepTogether vs text
+            status_indicators = []
+            
             # Enhanced pass/hold status with color coding
             if field_response.pass_hold_status:
                 # Handle both enum and string types for pass_hold_status
@@ -1311,27 +1377,47 @@ async def export_inspection_to_pdf(
                 else:
                     status_value = str(field_response.pass_hold_status).upper()
                 if status_value == 'PASS':
-                    status_indicator = f" <font color='#059669'><b>[✅ {status_value}]</b></font>"
+                    status_indicator = f"<font color='#059669'><b>[✅ {status_value}]</b></font>"
                 else:  # HOLD
-                    status_indicator = f" <font color='#dc2626'><b>[❌ {status_value}]</b></font>"
-                answer_text += status_indicator if answer_text else status_indicator[1:]  # Remove leading space if no answer
+                    status_indicator = f"<font color='#dc2626'><b>[❌ {status_value}]</b></font>"
+                status_indicators.append(status_indicator)
             
             # Add flag indicator if flagged
             if is_flagged:
-                answer_text += " <font color='#dc2626'><b>[🚩 FLAGGED]</b></font>"
+                status_indicators.append("<font color='#dc2626'><b>[🚩 FLAGGED]</b></font>")
+            
+            # Apply status indicators based on answer_text type
+            if hasattr(answer_text, '__class__') and 'Image' in str(answer_text.__class__):
+                # For Image objects (photos), create a simple list with image and status
+                if status_indicators:
+                    status_text = " ".join(status_indicators)
+                    status_paragraph = Paragraph(status_text, ParagraphStyle('Status', parent=normal_style, fontSize=10, spaceAfter=2))
+                    answer_text = [answer_text, status_paragraph]
+                # If no status indicators, keep just the image
+            else:
+                # For text answers, append status indicators directly
+                if status_indicators:
+                    status_text = " " + " ".join(status_indicators)
+                    answer_text += status_text if answer_text else status_text[1:]  # Remove leading space if no answer
         else:
             answer_text = "<font color='#9ca3af'>— No response provided —</font>"
         
         # Create formatted paragraphs
         question_paragraph = Paragraph(
-            f"<b>{question_text}</b><br/>{field_type_badge}",
+            f"<b>{question_text}</b>",
             ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
         )
         
-        answer_paragraph = Paragraph(
-            answer_text,
-            ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)
-        )
+        # Handle different answer types (text vs list/Image for images)
+        if isinstance(answer_text, (list, KeepTogether)) or (hasattr(answer_text, '__class__') and 'Image' in str(answer_text.__class__)):
+            # For images (photos/signatures), answer_text is already a flowable
+            answer_paragraph = answer_text
+        else:
+            # For text answers, create a Paragraph
+            answer_paragraph = Paragraph(
+                answer_text,
+                ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)
+            )
         
         response_data.append([question_paragraph, answer_paragraph])
         
@@ -1392,27 +1478,6 @@ async def export_inspection_to_pdf(
     ]))
     
     elements.append(response_table)
-    
-    # Enhanced footer section
-    elements.append(Spacer(1, 30))
-    
-
-    
-
-    
-    # Enhanced footer with branding
-    footer_text = f"📄 Generated on {datetime.now().strftime('%Y-%m-%d at %H:%M:%S')} by Sanalyze™"
-    footer_subtext = "Professional Inspection Management System"
-    
-    footer = Paragraph(f"<i>{footer_text}</i><br/><font size=7 color='#9ca3af'>{footer_subtext}</font>", ParagraphStyle(
-        'Footer',
-        parent=styles['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#6b7280'),
-        alignment=TA_CENTER,
-        spaceAfter=0
-    ))
-    elements.append(footer)
     
     # Build PDF
     doc.build(elements)
