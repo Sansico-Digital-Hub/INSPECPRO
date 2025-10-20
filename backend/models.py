@@ -46,7 +46,7 @@ class FileType(enum.Enum):
     signature = "signature"
 
 class User(Base):
-    __tablename__ = "sanalyze_users"
+    __tablename__ = "inspecpro_users"
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String(50), unique=True, nullable=False)
@@ -70,7 +70,7 @@ class Form(Base):
     id = Column(Integer, primary_key=True, index=True)
     form_name = Column(String(255), nullable=False)
     description = Column(Text)
-    created_by = Column(Integer, ForeignKey("sanalyze_users.id"), nullable=False)
+    created_by = Column(Integer, ForeignKey("inspecpro_users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     is_active = Column(Boolean, default=True)
@@ -108,9 +108,9 @@ class Inspection(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     form_id = Column(Integer, ForeignKey("forms.id"), nullable=False)
-    inspector_id = Column(Integer, ForeignKey("sanalyze_users.id"), nullable=False)
+    inspector_id = Column(Integer, ForeignKey("inspecpro_users.id"), nullable=False)
     status = Column(Enum(InspectionStatus), default=InspectionStatus.draft)
-    reviewed_by = Column(Integer, ForeignKey("sanalyze_users.id"))
+    reviewed_by = Column(Integer, ForeignKey("inspecpro_users.id"))
     reviewed_at = Column(DateTime(timezone=True))
     rejection_reason = Column(Text)
     reviewer_signature = Column(Text)  # Base64 encoded signature image
