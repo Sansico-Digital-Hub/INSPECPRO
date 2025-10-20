@@ -33,7 +33,7 @@ export default function Home() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="max-w-md w-full space-y-8">
           <div className="text-center">
-            <h1 className="text-4xl font-bold text-gray-900 mb-2">InsPecPro</h1>
+            <h1 className="text-4xl font-bold text-gray-900 mb-2">Sanalyze</h1>
             <p className="text-gray-600 mb-8">Professional Inspection Management System</p>
             
             <div className="space-y-4">
@@ -45,7 +45,7 @@ export default function Home() {
               </Link>
               
               <div className="text-sm text-gray-500">
-                <p>Welcome to InsPecPro - Your comprehensive inspection management solution</p>
+                <p>Welcome to Sanalyze - Your comprehensive inspection management solution by Sansico</p>
               </div>
             </div>
           </div>

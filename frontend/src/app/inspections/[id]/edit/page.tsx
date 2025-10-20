@@ -197,7 +197,7 @@ export default function EditInspectionPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
-              <h1 className="text-xl font-bold text-gray-900">InsPecPro</h1>
+              <h1 className="text-xl font-bold text-gray-900">Sanalyze</h1>
               <div className="ml-10 flex items-baseline space-x-4">
                 <a href="/dashboard" className="text-gray-800 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium">
                   Dashboard
@@ -735,7 +735,7 @@ function SearchableDropdown({
         value={searchTerm}
         onChange={handleInputChange}
         onFocus={() => setIsOpen(true)}
-        onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+        onBlur={() => setTimeout(() => setIsOpen(false), 300)}
         placeholder={placeholder}
         required={required}
         autoComplete="off"
@@ -747,7 +747,10 @@ function SearchableDropdown({
             <div
               key={index}
               className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-gray-900"
-              onClick={() => handleSelect(option)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleSelect(option);
+              }}
             >
               {option}
             </div>

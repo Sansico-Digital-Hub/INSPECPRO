@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 
 # Security configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "inspecpro-secret-key-2024-development-only")
+SECRET_KEY = os.getenv("SECRET_KEY", "sanalyze-secret-key-2024-development-only")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 

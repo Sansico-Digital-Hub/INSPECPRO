@@ -31,7 +31,7 @@ class EmailConfig:
         self.smtp_password = os.getenv('SMTP_PASSWORD')
         self.smtp_use_tls = os.getenv('SMTP_USE_TLS', 'true').lower() == 'true'
         self.from_email = os.getenv('FROM_EMAIL')
-        self.from_name = os.getenv('FROM_NAME', 'InsPecPro System')
+        self.from_name = os.getenv('FROM_NAME', 'Sanalyze System')
         self.admin_email = os.getenv('ADMIN_EMAIL')
         
         # Rate limiting settings
@@ -204,13 +204,13 @@ class EmailService:
             frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3002')
             reset_url = f"{frontend_url}/reset-password?token={reset_token}"
             
-            subject = "InsPecPro - Password Reset Request"
+            subject = "Sanalyze - Password Reset Request"
             
             # Plain text body
             body = f"""
 Hello{' ' + user_name if user_name else ''},
 
-You have requested to reset your password for your InsPecPro account.
+You have requested to reset your password for your Sanalyze account.
 
 Please click the following link to reset your password:
 {reset_url}
@@ -220,7 +220,7 @@ This link will expire in 1 hour for security reasons.
 If you did not request this password reset, please ignore this email.
 
 Best regards,
-InsPecPro Team
+Sanalyze Team
 """
             
             # HTML body
@@ -229,7 +229,7 @@ InsPecPro Team
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Password Reset - InsPecPro</title>
+    <title>Password Reset - Sanalyze</title>
     <style>
         body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
         .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
@@ -242,12 +242,12 @@ InsPecPro Team
 <body>
     <div class="container">
         <div class="header">
-            <h1>InsPecPro</h1>
+            <h1>Sanalyze</h1>
             <h2>Password Reset Request</h2>
         </div>
         <div class="content">
             <p>Hello{' ' + user_name if user_name else ''},</p>
-            <p>You have requested to reset your password for your InsPecPro account.</p>
+            <p>You have requested to reset your password for your Sanalyze account.</p>
             <p>Please click the button below to reset your password:</p>
             <p style="text-align: center;">
                 <a href="{reset_url}" class="button">Reset Password</a>
@@ -258,7 +258,7 @@ InsPecPro Team
             <p style="word-break: break-all;">{reset_url}</p>
         </div>
         <div class="footer">
-            <p>Best regards,<br>InsPecPro Team</p>
+            <p>Best regards,<br>Sanalyze Team</p>
             <p>This is an automated message, please do not reply to this email.</p>
         </div>
     </div>
@@ -282,12 +282,12 @@ InsPecPro Team
     def send_notification_email(self, to_email: str, title: str, message: str, priority: str = "normal") -> bool:
         """Send notification email."""
         try:
-            subject = f"InsPecPro Notification - {title}"
+            subject = f"Sanalyze Notification - {title}"
             
             body = f"""
 Hello,
 
-You have received a new notification from InsPecPro:
+You have received a new notification from Sanalyze:
 
 Title: {title}
 Priority: {priority.upper()}
@@ -298,7 +298,7 @@ Message:
 Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 Best regards,
-InsPecPro System
+Sanalyze System
 """
             
             return self.send_email(to_email, subject, body)
@@ -314,10 +314,10 @@ InsPecPro System
             return False
         
         try:
-            subject = f"InsPecPro Admin Alert - {title} [{severity.upper()}]"
+            subject = f"Sanalyze Admin Alert - {title} [{severity.upper()}]"
             
             body = f"""
-InsPecPro System Alert
+Sanalyze System Alert
 
 Title: {title}
 Severity: {severity.upper()}
@@ -326,7 +326,7 @@ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 Details:
 {message}
 
-This is an automated alert from the InsPecPro system.
+This is an automated alert from the Sanalyze system.
 """
             
             return self.send_email(self.config.admin_email, subject, body)

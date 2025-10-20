@@ -46,6 +46,12 @@ function DashboardContent() {
       color: 'bg-blue-500',
     },
     {
+      name: 'Total Forms',
+      value: stats?.total_forms || 0,
+      icon: DocumentTextIcon,
+      color: 'bg-purple-500',
+    },
+    {
       name: 'Submitted',
       value: stats?.submitted_inspections || 0,
       icon: ClockIcon,
@@ -111,7 +117,7 @@ function DashboardContent() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5 mb-8">
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-6 mb-8">
                 {statCards.map((stat) => (
                   <div
                     key={stat.name}

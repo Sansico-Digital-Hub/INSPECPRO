@@ -133,6 +133,7 @@ export interface DashboardStats {
   accepted_inspections: number;
   rejected_inspections: number;
   draft_inspections: number;
+  total_forms: number;
 }
 
 export interface AnalyticsData {

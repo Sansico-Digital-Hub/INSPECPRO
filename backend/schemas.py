@@ -187,6 +187,7 @@ class DashboardStats(BaseModel):
     accepted_inspections: int
     rejected_inspections: int
     draft_inspections: int
+    total_forms: int
 
 class AnalyticsData(BaseModel):
     date: str

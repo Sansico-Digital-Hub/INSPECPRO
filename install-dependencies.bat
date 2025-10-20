@@ -1,6 +1,6 @@
 @echo off
 echo ========================================
-echo Installing InsPecPro Dependencies
+echo Installing Sanalyze Dependencies
 echo ========================================
 
 echo.

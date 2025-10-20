@@ -34,10 +34,10 @@ export default function LoginPage() {
       <div className="max-w-md w-full space-y-8 bg-white p-10 rounded-xl shadow-2xl">
         <div>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            InsPecPro
+            Sanalyze
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            Inspection Management System
+            Sansico Analyze Management System
           </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>

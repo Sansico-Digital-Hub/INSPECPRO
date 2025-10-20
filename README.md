@@ -1,4 +1,4 @@
-# InsPecPro - Quality Assurance Inspection Management System
+# Sanalyze - Sansico Analyze Quality Assurance Inspection Management System
 
 ![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
@@ -7,7 +7,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104.1-green.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-14.2.33-black.svg)
 
-InsPecPro adalah sistem manajemen inspeksi Quality Assurance berbasis web yang komprehensif dan enterprise-grade, dibangun dengan frontend **Next.js 14** dan backend **FastAPI**. Dirancang untuk menyederhanakan proses inspeksi di berbagai peran organisasi dengan fitur-fitur canggih termasuk dynamic form builder, conditional logic, digital signatures, photo uploads, dan analytics komprehensif dengan **kemampuan export Excel yang canggih**.
+Sanalyze adalah sistem manajemen inspeksi Quality Assurance berbasis web yang komprehensif dan enterprise-grade dari Sansico, dibangun dengan frontend **Next.js 14** dan backend **FastAPI**. Dirancang untuk menyederhanakan proses inspeksi di berbagai peran organisasi dengan fitur-fitur canggih termasuk dynamic form builder, conditional logic, digital signatures, photo uploads, dan analytics komprehensif dengan **kemampuan export Excel yang canggih**.
 
 ## 📑 Table of Contents
 

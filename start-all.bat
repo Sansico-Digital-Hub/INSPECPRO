@@ -1,6 +1,6 @@
 @echo off
 echo ========================================
-echo Starting InsPecPro Application
+echo Starting Sanalyze Application
 echo ========================================
 
 echo.
@@ -37,11 +37,11 @@ timeout /t 3 /nobreak >nul
 echo.
 echo Starting Frontend Server...
 echo ----------------------------------------
-start "InsPecPro Frontend" cmd /k "cd frontend && npm run dev"
+start "Sanalyze Frontend" cmd /k "cd frontend && npm run dev"
 
 echo.
 echo ========================================
-echo InsPecPro Application is starting...
+echo Sanalyze Application is starting...
 echo ========================================
 echo.
 echo Backend: Running on http://localhost:8000

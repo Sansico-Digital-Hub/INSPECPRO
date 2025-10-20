@@ -1,6 +1,6 @@
 @echo off
 echo ========================================
-echo Stopping InsPecPro Application
+echo Stopping Sanalyze Application
 echo ========================================
 
 echo.
@@ -32,12 +32,12 @@ taskkill /f /im npm 2>nul
 echo.
 echo Closing InsPecPro terminal windows...
 echo ----------------------------------------
-taskkill /f /fi "WindowTitle eq InsPecPro Backend*" 2>nul
-taskkill /f /fi "WindowTitle eq InsPecPro Frontend*" 2>nul
+taskkill /f /fi "WindowTitle eq Sanalyze Backend*" 2>nul
+taskkill /f /fi "WindowTitle eq Sanalyze Frontend*" 2>nul
 
 echo.
 echo ========================================
-echo InsPecPro Application has been stopped
+echo Sanalyze Application has been stopped
 echo ========================================
 echo.
 echo All servers and processes have been terminated.

@@ -25,7 +25,7 @@ logger.info("Database tables created/verified")
 limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
-    title="InsPecPro API",
+    title="Sanalyze API",
     description="Quality Assurance Inspection Management System",
     version="1.0.0"
 )
@@ -45,7 +45,7 @@ dev_origins = [
 
 # Production origins - Replace with your actual domain
 prod_origins = [
-    "https://yourdomain.com",
+    "http://180.250.95.156:3002",
     "https://www.yourdomain.com",
     "https://inspecpro.yourdomain.com"
 ]
@@ -72,7 +72,7 @@ app.include_router(doc_number.router, prefix="/api/doc-numbers", tags=["Document
 
 @app.get("/")
 async def root():
-    return {"message": "InsPecPro API is running"}
+    return {"message": "Sanalyze API is running"}
 
 @app.get("/health")
 async def health_check():

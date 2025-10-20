@@ -1396,62 +1396,12 @@ async def export_inspection_to_pdf(
     # Enhanced footer section
     elements.append(Spacer(1, 30))
     
-    # Summary statistics
-    total_fields = len(sorted_fields)
-    answered_fields = len([f for f in sorted_fields if responses_map.get(f.id)])
-    completion_rate = (answered_fields / total_fields * 100) if total_fields > 0 else 0
+
     
-    # Pass/Hold summary
-    def get_status_value(response):
-        if hasattr(response.pass_hold_status, 'value'):
-            return response.pass_hold_status.value
-        else:
-            return str(response.pass_hold_status)
-    
-    pass_count = len([r for r in inspection.responses if r.pass_hold_status and get_status_value(r) == 'pass'])
-    hold_count = len([r for r in inspection.responses if r.pass_hold_status and get_status_value(r) == 'hold'])
-    flagged_count = len(flagged_rows)
-    
-    # Summary section
-    summary_title = Paragraph("<b>📊 INSPECTION SUMMARY</b>", section_style)
-    elements.append(summary_title)
-    elements.append(Spacer(1, 8))
-    
-    summary_data = [
-        ['📋 Total Fields:', str(total_fields)],
-        ['✅ Completed Fields:', f"{answered_fields} ({completion_rate:.1f}%)"],
-        ['🟢 Pass Count:', str(pass_count)],
-        ['🔴 Hold Count:', str(hold_count)],
-        ['🚩 Flagged Abnormal:', str(flagged_count)],
-        ['📊 Overall Status:', inspection.status.value.upper()]
-    ]
-    
-    summary_table = Table(summary_data, colWidths=[2.5*inch, 2*inch])
-    summary_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#1e40af')),
-        ('TEXTCOLOR', (0, 0), (0, -1), colors.white),
-        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (0, -1), 10),
-        
-        ('BACKGROUND', (1, 0), (1, -1), colors.HexColor('#f8fafc')),
-        ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#374151')),
-        ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
-        ('FONTSIZE', (1, 0), (1, -1), 10),
-        
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#d1d5db')),
-        ('LEFTPADDING', (0, 0), (-1, -1), 10),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-    ]))
-    
-    elements.append(summary_table)
-    elements.append(Spacer(1, 20))
+
     
     # Enhanced footer with branding
-    footer_text = f"📄 Generated on {datetime.now().strftime('%Y-%m-%d at %H:%M:%S')} by InsPecPro™"
+    footer_text = f"📄 Generated on {datetime.now().strftime('%Y-%m-%d at %H:%M:%S')} by Sanalyze™"
     footer_subtext = "Professional Inspection Management System"
     
     footer = Paragraph(f"<i>{footer_text}</i><br/><font size=7 color='#9ca3af'>{footer_subtext}</font>", ParagraphStyle(

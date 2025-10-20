@@ -56,7 +56,7 @@ class NumberedCanvas(canvas.Canvas):
         """Draw header with company logo and title."""
         self.setFont("Helvetica-Bold", 10)
         self.setFillColor(colors.HexColor('#1e40af'))
-        self.drawString(0.75 * inch, letter[1] - 0.5 * inch, "InsPecPro - Inspection Report")
+        self.drawString(0.75 * inch, letter[1] - 0.5 * inch, "Sanalyze - Inspection Report")
         
         # Draw a line under the header
         self.setStrokeColor(colors.HexColor('#1e40af'))
@@ -70,7 +70,7 @@ class NumberedCanvas(canvas.Canvas):
         self.drawString(
             0.75 * inch,
             0.3 * inch,
-            f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | InsPecPro System"
+            f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Sanalyze System"
         )
 
 def create_enhanced_styles():

@@ -49,7 +49,7 @@ def setup_logging():
                 'level': 'INFO',
                 'class': 'logging.handlers.RotatingFileHandler',
                 'formatter': 'detailed',
-                'filename': os.path.join(log_dir, 'inspecpro.log'),
+                'filename': os.path.join(log_dir, 'sanalyze.log'),
                 'maxBytes': 10485760,  # 10MB
                 'backupCount': 5,
                 'encoding': 'utf8'
@@ -79,22 +79,22 @@ def setup_logging():
                 'level': log_level,
                 'propagate': False
             },
-            'inspecpro': {
+            'sanalyze': {
                 'handlers': ['console', 'file'],
                 'level': log_level,
                 'propagate': False
             },
-            'inspecpro.security': {
+            'sanalyze.security': {
                 'handlers': ['console', 'security_file', 'error_file'],
                 'level': 'WARNING',
                 'propagate': False
             },
-            'inspecpro.auth': {
+            'sanalyze.auth': {
                 'handlers': ['console', 'file', 'security_file'],
                 'level': 'INFO',
                 'propagate': False
             },
-            'inspecpro.file_upload': {
+            'sanalyze.file_upload': {
                 'handlers': ['console', 'file', 'security_file'],
                 'level': 'INFO',
                 'propagate': False
@@ -121,19 +121,19 @@ def setup_logging():
     logging.config.dictConfig(logging_config)
     
     # Log startup message
-    logger = logging.getLogger('inspecpro')
+    logger = logging.getLogger('sanalyze')
     logger.info(f"Logging system initialized for environment: {environment}")
     logger.info(f"Log files location: {os.path.abspath(log_dir)}")
 
 def get_logger(name: str = None):
     """Get a logger instance"""
     if name:
-        return logging.getLogger(f'inspecpro.{name}')
-    return logging.getLogger('inspecpro')
+        return logging.getLogger(f'sanalyze.{name}')
+    return logging.getLogger('sanalyze')
 
 def log_security_event(event_type: str, details: str, user_id: int = None, ip_address: str = None):
     """Log security-related events"""
-    security_logger = logging.getLogger('inspecpro.security')
+    security_logger = logging.getLogger('sanalyze.security')
     
     log_message = f"SECURITY_EVENT: {event_type} - {details}"
     if user_id:

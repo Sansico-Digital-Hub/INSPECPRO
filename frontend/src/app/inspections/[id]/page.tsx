@@ -135,14 +135,14 @@ export default function InspectionDetailPage() {
                           {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
                         </div>
                       )}
-                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                      <div className={response?.is_flagged ? 'font-medium text-black' : ''}>
                         Value: {response?.measurement_value ?? 'N/A'}
                       </div>
-                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                      <div className={response?.is_flagged ? 'font-medium text-black' : ''}>
                         Status: {response?.pass_hold_status ?? 'N/A'}
                       </div>
                       {response?.is_flagged && (
-                        <div className="mt-1 text-xs text-red-600 font-medium">
+                        <div className="mt-1 text-xs text-black font-medium">
                           ⚠️ This response has been flagged as abnormal
                         </div>
                       )}
@@ -231,11 +231,11 @@ export default function InspectionDetailPage() {
                           {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
                         </div>
                       )}
-                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                      <div className={response?.is_flagged ? 'font-medium text-black' : ''}>
                         Status: {response?.pass_hold_status ?? 'No selection'}
                       </div>
                       {response?.is_flagged && (
-                        <div className="mt-1 text-xs text-red-600 font-medium">
+                        <div className="mt-1 text-xs text-black font-medium">
                           ⚠️ This response has been flagged as abnormal
                         </div>
                       )}
@@ -249,11 +249,11 @@ export default function InspectionDetailPage() {
                           {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
                         </div>
                       )}
-                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                      <div className={response?.is_flagged ? 'font-medium text-black' : ''}>
                         {response?.response_value || 'No response'}
                       </div>
                       {response?.is_flagged && (
-                        <div className="mt-1 text-xs text-red-600 font-medium">
+                        <div className="mt-1 text-xs text-black font-medium">
                           ⚠️ This response has been flagged as abnormal
                         </div>
                       )}
@@ -310,7 +310,7 @@ export default function InspectionDetailPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
-              <h1 className="text-xl font-bold text-gray-900">InsPecPro</h1>
+              <h1 className="text-xl font-bold text-gray-900">Sanalyze</h1>
               <div className="ml-10 flex items-baseline space-x-4">
                 <a href="/dashboard" className="text-gray-800 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium">
                   Dashboard

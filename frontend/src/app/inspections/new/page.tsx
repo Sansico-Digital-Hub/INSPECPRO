@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { formsAPI, inspectionsAPI, docNumbersAPI } from '@/lib/api';
@@ -16,6 +16,7 @@ export default function NewInspectionPage() {
   const [responses, setResponses] = useState<Record<string, InspectionResponse>>({});
   const [loading, setLoading] = useState(false);
   const [isDraft, setIsDraft] = useState(false);
+  const [photoFiles, setPhotoFiles] = useState<{ [fieldId: string]: File }>({});
 
   useEffect(() => {
     fetchForms();
@@ -210,6 +211,42 @@ export default function NewInspectionPage() {
       const inspection = await inspectionsAPI.createInspection(inspectionData);
       
       console.log('✅ Inspection created:', inspection);
+
+      // Upload photos after inspection is created
+      const photoUploadPromises = [];
+      for (const [fieldKey, file] of Object.entries(photoFiles)) {
+        if (file && fieldKey !== 'temp') {
+          const fieldId = parseInt(fieldKey);
+          if (!isNaN(fieldId)) {
+            console.log(`📸 Uploading photo for field ${fieldId}:`, file.name);
+            photoUploadPromises.push(
+              inspectionsAPI.uploadFile(inspection.id, fieldId, file, 'photo')
+                .then(result => {
+                  console.log(`✅ Photo uploaded for field ${fieldId}:`, result);
+                  // Update the response value with the actual filename
+                  return inspectionsAPI.updateInspection(inspection.id, {
+                    responses: validResponses.map(resp => 
+                      resp.field_id === fieldId 
+                        ? { ...resp, response_value: result.safe_filename }
+                        : resp
+                    )
+                  });
+                })
+                .catch(error => {
+                  console.error(`❌ Failed to upload photo for field ${fieldId}:`, error);
+                  toast.error(`Failed to upload photo: ${file.name}`);
+                  throw error;
+                })
+            );
+          }
+        }
+      }
+
+      if (photoUploadPromises.length > 0) {
+        console.log(`📸 Uploading ${photoUploadPromises.length} photos...`);
+        await Promise.all(photoUploadPromises);
+        console.log('✅ All photos uploaded successfully');
+      }
       
       if (!asDraft) {
         await inspectionsAPI.submitInspection(inspection.id);
@@ -254,7 +291,7 @@ export default function NewInspectionPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
-              <h1 className="text-xl font-bold text-gray-900">InsPecPro</h1>
+              <h1 className="text-xl font-bold text-gray-900">Sanalyze</h1>
               <div className="ml-10 flex items-baseline space-x-4">
                 <a href="/dashboard" className="text-gray-800 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium">
                   Dashboard
@@ -322,6 +359,8 @@ export default function NewInspectionPage() {
                         field={field}
                         responses={responses}
                         updateResponse={updateResponse}
+                        photoFiles={photoFiles}
+                        setPhotoFiles={setPhotoFiles}
                       />
                     ))}
                 </div>
@@ -361,12 +400,16 @@ function MultiTypeFieldRenderer({
   field,
   responses,
   updateResponse,
-  parentPath = ''  // Track parent path for unique keys
+  parentPath = '',  // Track parent path for unique keys
+  photoFiles,
+  setPhotoFiles
 }: {
   field: FormField;
   responses: Record<string, InspectionResponse>;
   updateResponse: (fieldId: string, updates: Partial<InspectionResponse>) => void;
   parentPath?: string;
+  photoFiles: { [fieldId: string]: File };
+  setPhotoFiles: React.Dispatch<React.SetStateAction<{ [fieldId: string]: File }>>;
 }) {
   // Generate unique key for this field (same logic as initializeFieldResponses)
   const fieldKey = field.id 
@@ -428,6 +471,8 @@ function MultiTypeFieldRenderer({
                 field={typeSpecificField}
                 response={response}
                 onUpdate={(updates) => updateResponse(responseKey, updates)}
+                photoFiles={photoFiles}
+                setPhotoFiles={setPhotoFiles}
               />
             </div>
           );
@@ -436,9 +481,9 @@ function MultiTypeFieldRenderer({
       
       {/* Render conditional fields recursively */}
       {matchingRule && matchingRule.next_fields && matchingRule.next_fields.length > 0 && (
-        <div className="ml-6 mt-4 pl-4 border-l-2 border-blue-300 space-y-4">
-          <div className="text-xs font-semibold text-blue-600 mb-2">
-            ↳ Conditional Fields (when "{currentValue}"):
+        <div className="ml-6 mt-4 pl-4 border-l-4 border-blue-500 bg-blue-50 rounded-lg p-4 space-y-4">
+          <div className="text-sm font-semibold text-black mb-2 bg-blue-100 px-3 py-2 rounded border">
+            📋 Subform Fields (when "{currentValue}"):
           </div>
           {matchingRule.next_fields.map((conditionalField, idx) => {
             // Create unique parent path for nested fields
@@ -452,6 +497,8 @@ function MultiTypeFieldRenderer({
                 responses={responses}
                 updateResponse={updateResponse}
                 parentPath={newParentPath}
+                photoFiles={photoFiles}
+                setPhotoFiles={setPhotoFiles}
               />
             );
           })}
@@ -464,14 +511,17 @@ function MultiTypeFieldRenderer({
 function FieldRenderer({
   field,
   response,
-  onUpdate
+  onUpdate,
+  photoFiles,
+  setPhotoFiles
 }: {
   field: FormField;
   response: InspectionResponse;
   onUpdate: (updates: Partial<InspectionResponse>) => void;
+  photoFiles: { [fieldId: string]: File };
+  setPhotoFiles: React.Dispatch<React.SetStateAction<{ [fieldId: string]: File }>>;
 }) {
   const [signatureRef, setSignatureRef] = useState<SignatureCanvas | null>(null);
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
 
   // Check if field has multiple types
   const hasMultipleTypes = field.field_types && field.field_types.length > 1;
@@ -669,6 +719,8 @@ function FieldRenderer({
         );
 
       case FieldType.PHOTO:
+        const fieldKey = field.id?.toString() || 'temp';
+        const currentPhotoFile = photoFiles[fieldKey];
         return (
           <div className="space-y-4">
             <div>
@@ -678,21 +730,24 @@ function FieldRenderer({
                 className="mt-1 block w-full text-sm text-gray-900 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
-                  if (file) {
-                    setPhotoFile(file);
-                    onUpdate({ response_value: file.name });
+                  if (file && field.id) {
+                    setPhotoFiles(prev => ({ ...prev, [fieldKey]: file }));
+                    onUpdate({ response_value: `pending_upload_${file.name}` });
                   }
                 }}
                 required={field.is_required}
               />
             </div>
-            {photoFile && (
+            {currentPhotoFile && (
               <div className="mt-2">
                 <img
-                  src={URL.createObjectURL(photoFile)}
+                  src={URL.createObjectURL(currentPhotoFile)}
                   alt="Preview"
                   className="h-32 w-32 object-cover rounded-lg"
                 />
+                <p className="text-sm text-gray-600 mt-1">
+                  File: {currentPhotoFile.name} ({(currentPhotoFile.size / 1024).toFixed(1)} KB)
+                </p>
               </div>
             )}
           </div>
@@ -865,7 +920,7 @@ function SearchableDropdown({
         value={searchTerm}
         onChange={handleInputChange}
         onFocus={() => setIsOpen(true)}
-        onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+        onBlur={() => setTimeout(() => setIsOpen(false), 300)}
         placeholder={placeholder}
         required={required}
         autoComplete="off"
@@ -877,7 +932,10 @@ function SearchableDropdown({
             <div
               key={index}
               className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-gray-900"
-              onClick={() => handleSelect(option)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleSelect(option);
+              }}
             >
               {option}
             </div>

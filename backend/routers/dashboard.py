@@ -30,12 +30,16 @@ async def get_dashboard_stats(
     rejected_inspections = query.filter(Inspection.status == InspectionStatus.rejected).count()
     draft_inspections = query.filter(Inspection.status == InspectionStatus.draft).count()
     
+    # Get total forms count
+    total_forms = db.query(Form).filter(Form.is_active == True).count()
+    
     return DashboardStats(
         total_inspections=total_inspections,
         submitted_inspections=submitted_inspections,
         accepted_inspections=accepted_inspections,
         rejected_inspections=rejected_inspections,
-        draft_inspections=draft_inspections
+        draft_inspections=draft_inspections,
+        total_forms=total_forms
     )
 
 @router.get("/analytics", response_model=AnalyticsResponse)
