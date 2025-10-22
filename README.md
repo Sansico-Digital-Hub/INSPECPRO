@@ -1,4 +1,4 @@
-# InsPecPro - Quality Assurance Inspection Management System
+# Sanalyze - Sansico Analyze Quality Assurance Inspection Management System
 
 ![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
@@ -7,7 +7,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104.1-green.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-14.2.33-black.svg)
 
-InsPecPro adalah sistem manajemen inspeksi Quality Assurance berbasis web yang komprehensif dan enterprise-grade, dibangun dengan frontend **Next.js 14** dan backend **FastAPI**. Dirancang untuk menyederhanakan proses inspeksi di berbagai peran organisasi dengan fitur-fitur canggih termasuk dynamic form builder, conditional logic, digital signatures, photo uploads, dan analytics komprehensif dengan **kemampuan export Excel yang canggih**.
+Sanalyze adalah sistem manajemen inspeksi Quality Assurance berbasis web yang komprehensif dan enterprise-grade dari Sansico, dibangun dengan frontend **Next.js 14** dan backend **FastAPI**. Dirancang untuk menyederhanakan proses inspeksi di berbagai peran organisasi dengan fitur-fitur canggih termasuk dynamic form builder, conditional logic, digital signatures, photo uploads, dan analytics komprehensif dengan **kemampuan export Excel yang canggih**.
 
 ## 📑 Table of Contents
 
@@ -349,7 +349,7 @@ npm run dev
    EMAIL_FROM=your-email@gmail.com
    
    # CORS Configuration
-   FRONTEND_URL=http://localhost:3000
+   FRONTEND_URL=http://localhost:3002
    ```
 
 5. **Create MySQL database**:
@@ -371,9 +371,9 @@ npm run dev
    ```bash
    python main.py
    ```
-   - Backend API: `http://localhost:8000`
-   - API Documentation: `http://localhost:8000/docs`
-   - Alternative Docs: `http://localhost:8000/redoc`
+   - Backend API: `http://localhost:8004`
+   - API Documentation: `http://localhost:8004/docs`
+   - Alternative Docs: `http://localhost:8004/redoc`
 
 ### Frontend Setup (Detailed)
 
@@ -390,14 +390,14 @@ npm run dev
 3. **Configure environment** (optional):
    Create `.env.local` file:
    ```env
-   NEXT_PUBLIC_API_URL=http://localhost:8000
+   NEXT_PUBLIC_API_URL=http://localhost:8004
    ```
 
 4. **Start the development server**:
    ```bash
    npm run dev
    ```
-   Frontend will run on `http://localhost:3000`
+   Frontend will run on `http://localhost:3002`
 
 5. **Build for production**:
    ```bash
@@ -694,7 +694,7 @@ For support and questions:
 # Jika ada error dependencies
 pip install -r requirements.txt --upgrade
 
-# Jika ada error port 8000 sudah digunakan
+# Jika ada error port 8004 sudah digunakan
 # Ganti port di main.py atau kill process yang menggunakan port tersebut
 ```
 
@@ -706,7 +706,7 @@ npm install --force
 # Jika ada TypeScript errors
 npm run build
 
-# Jika ada error port 3000 sudah digunakan
+# Jika ada error port 3002 sudah digunakan
 # Next.js akan otomatis suggest port lain (3001, 3002, etc.)
 ```
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { formsAPI, inspectionsAPI, docNumbersAPI } from '@/lib/api';
@@ -16,6 +16,7 @@ export default function NewInspectionPage() {
   const [responses, setResponses] = useState<Record<string, InspectionResponse>>({});
   const [loading, setLoading] = useState(false);
   const [isDraft, setIsDraft] = useState(false);
+  const [photoFiles, setPhotoFiles] = useState<{ [fieldId: string]: File }>({});
 
   useEffect(() => {
     fetchForms();
@@ -95,6 +96,25 @@ export default function NewInspectionPage() {
         pass_hold_status: undefined
       };
     });
+
+    // Initialize subform instances if this is a subform field
+    if (field.field_type === 'subform' && field.id) {
+      const subformInstancesKey = `${field.id}_subform_instances`;
+      const minInstances = field.field_options?.min_instances || 0;
+      
+      // Create minimum required instances with empty data
+      const initialInstances = Array.from({ length: Math.max(1, minInstances) }, (_, i) => ({
+        id: `instance_${Date.now()}_${i}`,
+        data: {}
+      }));
+      
+      initialResponses[subformInstancesKey] = {
+        field_id: field.id,
+        response_value: JSON.stringify(initialInstances),
+        measurement_value: undefined,
+        pass_hold_status: undefined
+      };
+    }
     
     // Recursively initialize conditional fields
     if (field.has_conditional && field.conditional_rules) {
@@ -170,14 +190,79 @@ export default function NewInspectionPage() {
     setIsDraft(asDraft);
 
     try {
+      // First, collect subform field data into instance data structures
+      console.log('🔄 Processing subform data...');
+      
+      // Create a copy of responses to modify
+      const updatedResponses = { ...responses };
+      
+      // Process each subform field to collect individual field data into instances
+      selectedForm.fields?.forEach((field: any) => {
+        if (field.field_type === 'subform') {
+          const subformInstancesKey = `${field.id}_subform_instances`;
+          const instancesResponse = updatedResponses[subformInstancesKey];
+          
+          if (instancesResponse?.response_value) {
+            try {
+              const instances = JSON.parse(instancesResponse.response_value);
+              console.log(`📋 Processing subform field ${field.field_name} with ${instances.length} instances`);
+              
+              // Collect data for each instance
+              instances.forEach((instance: any, instanceIndex: number) => {
+                const instanceData: any = {};
+                
+                // Collect all subfield values for this instance
+                field.field_options?.subform_fields?.forEach((subField: any) => {
+                  const subFieldKey = `${field.id}_instance_${instanceIndex}_${subField.field_name}`;
+                  const subFieldResponse = updatedResponses[subFieldKey];
+                  
+                  if (subFieldResponse) {
+                    // Store the field value in the instance data
+                    if (subFieldResponse.response_value !== undefined && subFieldResponse.response_value !== '') {
+                      instanceData[subField.field_name] = subFieldResponse.response_value;
+                    } else if (subFieldResponse.measurement_value !== undefined) {
+                      instanceData[subField.field_name] = subFieldResponse.measurement_value;
+                    } else if (subFieldResponse.pass_hold_status !== undefined) {
+                      instanceData[subField.field_name] = subFieldResponse.pass_hold_status;
+                    }
+                    
+                    console.log(`  📝 Collected ${subField.field_name}: ${instanceData[subField.field_name]}`);
+                  }
+                });
+                
+                // Update the instance data
+                instance.data = instanceData;
+                console.log(`  ✅ Instance ${instanceIndex + 1} data:`, instanceData);
+              });
+              
+              // Update the response with the collected data
+              updatedResponses[subformInstancesKey] = {
+                ...instancesResponse,
+                response_value: JSON.stringify(instances)
+              };
+              
+              console.log(`✅ Updated subform ${field.field_name} with collected data:`, instances);
+            } catch (error) {
+              console.error(`❌ Error processing subform ${field.field_name}:`, error);
+            }
+          }
+        }
+      });
+
       // Prepare responses: only include responses with field_id (skip conditional fields without ID)
       // Backend will need to handle conditional fields separately or we store them differently
-      const validResponses = Object.entries(responses)
+      const validResponses = Object.entries(updatedResponses)
         .filter(([key, response]) => {
-          // Include if has value and has field_id
-          const hasValue = response.response_value || response.measurement_value !== undefined || response.pass_hold_status;
+          // Include if has field_id
           const hasFieldId = response.field_id !== null;
-          return hasValue && hasFieldId;
+          
+          // For subform instances, always include them even if empty (they contain JSON data)
+          const isSubformInstance = key.includes('_subform_instances');
+          
+          // Include if has value and has field_id, OR if it's a subform instance with field_id
+          const hasValue = response.response_value || response.measurement_value !== undefined || response.pass_hold_status;
+          
+          return hasFieldId && (hasValue || isSubformInstance);
         })
         .map(([key, response]) => response);
 
@@ -185,7 +270,7 @@ export default function NewInspectionPage() {
       
       // For conditional fields without field_id, we'll store them as JSON in a special field
       // or handle them differently based on backend requirements
-      const conditionalResponses = Object.entries(responses)
+      const conditionalResponses = Object.entries(updatedResponses)
         .filter(([key, response]) => {
           const hasValue = response.response_value || response.measurement_value !== undefined || response.pass_hold_status;
           const noFieldId = response.field_id === null;
@@ -210,6 +295,42 @@ export default function NewInspectionPage() {
       const inspection = await inspectionsAPI.createInspection(inspectionData);
       
       console.log('✅ Inspection created:', inspection);
+
+      // Upload photos after inspection is created
+      const photoUploadPromises = [];
+      for (const [fieldKey, file] of Object.entries(photoFiles)) {
+        if (file && fieldKey !== 'temp') {
+          const fieldId = parseInt(fieldKey);
+          if (!isNaN(fieldId)) {
+            console.log(`📸 Uploading photo for field ${fieldId}:`, file.name);
+            photoUploadPromises.push(
+              inspectionsAPI.uploadFile(inspection.id, fieldId, file, 'photo')
+                .then(result => {
+                  console.log(`✅ Photo uploaded for field ${fieldId}:`, result);
+                  // Update the response value with the actual filename
+                  return inspectionsAPI.updateInspection(inspection.id, {
+                    responses: validResponses.map(resp => 
+                      resp.field_id === fieldId 
+                        ? { ...resp, response_value: result.safe_filename }
+                        : resp
+                    )
+                  });
+                })
+                .catch(error => {
+                  console.error(`❌ Failed to upload photo for field ${fieldId}:`, error);
+                  toast.error(`Failed to upload photo: ${file.name}`);
+                  throw error;
+                })
+            );
+          }
+        }
+      }
+
+      if (photoUploadPromises.length > 0) {
+        console.log(`📸 Uploading ${photoUploadPromises.length} photos...`);
+        await Promise.all(photoUploadPromises);
+        console.log('✅ All photos uploaded successfully');
+      }
       
       if (!asDraft) {
         await inspectionsAPI.submitInspection(inspection.id);
@@ -254,7 +375,7 @@ export default function NewInspectionPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
-              <h1 className="text-xl font-bold text-gray-900">InsPecPro</h1>
+              <h1 className="text-xl font-bold text-gray-900">Sanalyze</h1>
               <div className="ml-10 flex items-baseline space-x-4">
                 <a href="/dashboard" className="text-gray-800 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium">
                   Dashboard
@@ -322,6 +443,9 @@ export default function NewInspectionPage() {
                         field={field}
                         responses={responses}
                         updateResponse={updateResponse}
+                        photoFiles={photoFiles}
+                        setPhotoFiles={setPhotoFiles}
+                        setResponses={setResponses}
                       />
                     ))}
                 </div>
@@ -361,12 +485,18 @@ function MultiTypeFieldRenderer({
   field,
   responses,
   updateResponse,
-  parentPath = ''  // Track parent path for unique keys
+  parentPath = '',  // Track parent path for unique keys
+  photoFiles,
+  setPhotoFiles,
+  setResponses
 }: {
   field: FormField;
   responses: Record<string, InspectionResponse>;
   updateResponse: (fieldId: string, updates: Partial<InspectionResponse>) => void;
   parentPath?: string;
+  photoFiles: { [fieldId: string]: File };
+  setPhotoFiles: React.Dispatch<React.SetStateAction<{ [fieldId: string]: File }>>;
+  setResponses: React.Dispatch<React.SetStateAction<Record<string, InspectionResponse>>>;
 }) {
   // Generate unique key for this field (same logic as initializeFieldResponses)
   const fieldKey = field.id 
@@ -416,8 +546,8 @@ function MultiTypeFieldRenderer({
             ...field,
             field_type: fieldType
           };
-          
-          return (
+
+                    return (
             <div key={`${fieldKey}-${fieldType}-${index}`}>
               {fieldTypes.length > 1 && (
                 <div className="text-xs font-semibold text-gray-800 mb-1 bg-blue-50 px-3 py-2 rounded border border-blue-200">
@@ -428,6 +558,10 @@ function MultiTypeFieldRenderer({
                 field={typeSpecificField}
                 response={response}
                 onUpdate={(updates) => updateResponse(responseKey, updates)}
+                photoFiles={photoFiles}
+                setPhotoFiles={setPhotoFiles}
+                responses={responses}
+                setResponses={setResponses}
               />
             </div>
           );
@@ -436,9 +570,9 @@ function MultiTypeFieldRenderer({
       
       {/* Render conditional fields recursively */}
       {matchingRule && matchingRule.next_fields && matchingRule.next_fields.length > 0 && (
-        <div className="ml-6 mt-4 pl-4 border-l-2 border-blue-300 space-y-4">
-          <div className="text-xs font-semibold text-blue-600 mb-2">
-            ↳ Conditional Fields (when "{currentValue}"):
+        <div className="ml-6 mt-4 pl-4 border-l-4 border-blue-500 bg-blue-50 rounded-lg p-4 space-y-4">
+          <div className="text-sm font-semibold text-black mb-2 bg-blue-100 px-3 py-2 rounded border">
+            📋 Subform Fields (when "{currentValue}"):
           </div>
           {matchingRule.next_fields.map((conditionalField, idx) => {
             // Create unique parent path for nested fields
@@ -452,6 +586,9 @@ function MultiTypeFieldRenderer({
                 responses={responses}
                 updateResponse={updateResponse}
                 parentPath={newParentPath}
+                photoFiles={photoFiles}
+                setPhotoFiles={setPhotoFiles}
+                setResponses={setResponses}
               />
             );
           })}
@@ -464,22 +601,43 @@ function MultiTypeFieldRenderer({
 function FieldRenderer({
   field,
   response,
-  onUpdate
+  onUpdate,
+  photoFiles,
+  setPhotoFiles,
+  responses,
+  setResponses
 }: {
   field: FormField;
   response: InspectionResponse;
   onUpdate: (updates: Partial<InspectionResponse>) => void;
+  photoFiles: { [fieldId: string]: File };
+  setPhotoFiles: React.Dispatch<React.SetStateAction<{ [fieldId: string]: File }>>;
+  responses: Record<string, InspectionResponse>;
+  setResponses: React.Dispatch<React.SetStateAction<Record<string, InspectionResponse>>>;
 }) {
   const [signatureRef, setSignatureRef] = useState<SignatureCanvas | null>(null);
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
 
   // Check if field has multiple types
   const hasMultipleTypes = field.field_types && field.field_types.length > 1;
   const activeFieldType = hasMultipleTypes ? field.field_type : field.field_type;
 
   const renderSingleFieldType = (fieldType: FieldType) => {
-    switch (fieldType) {
-      case FieldType.TEXT:
+    // Normalize fieldType to handle any string/enum mismatches
+    const normalizedFieldType = String(fieldType).toLowerCase();
+    
+    // Debug logging for FieldRenderer
+    if (normalizedFieldType === 'dropdown') {
+      console.log(`🎯 FieldRenderer dropdown debug:`, {
+        field_name: field.field_name,
+        field_type: fieldType,
+        normalized_type: normalizedFieldType,
+        field_options: field.field_options,
+        options_array: field.field_options?.options
+      });
+    }
+    
+    switch (normalizedFieldType) {
+      case 'text':
         return (
           <input
             type="text"
@@ -491,7 +649,7 @@ function FieldRenderer({
           />
         );
 
-      case FieldType.NOTES:
+      case 'notes':
         return (
           <div className="mt-1">
             <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
@@ -520,7 +678,7 @@ function FieldRenderer({
           </div>
         );
 
-      case FieldType.DROPDOWN:
+      case 'dropdown':
         return (
           <select
             className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-gray-900"
@@ -537,7 +695,7 @@ function FieldRenderer({
           </select>
         );
 
-      case FieldType.SEARCH_DROPDOWN:
+      case 'search_dropdown':
         return (
           <SearchableDropdown
             options={field.field_options?.options || []}
@@ -548,7 +706,7 @@ function FieldRenderer({
           />
         );
 
-      case FieldType.BUTTON:
+      case 'button':
         return (
           <div className="flex space-x-2">
             <button
@@ -576,7 +734,7 @@ function FieldRenderer({
           </div>
         );
 
-      case FieldType.MEASUREMENT:
+      case 'measurement':
         const handleMeasurementChange = (value: number | undefined) => {
           if (value === undefined) {
             onUpdate({ measurement_value: undefined, pass_hold_status: undefined });
@@ -668,7 +826,9 @@ function FieldRenderer({
           </div>
         );
 
-      case FieldType.PHOTO:
+      case 'photo':
+        const fieldKey = field.id?.toString() || 'temp';
+        const currentPhotoFile = photoFiles[fieldKey];
         return (
           <div className="space-y-4">
             <div>
@@ -678,27 +838,30 @@ function FieldRenderer({
                 className="mt-1 block w-full text-sm text-gray-900 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
-                  if (file) {
-                    setPhotoFile(file);
-                    onUpdate({ response_value: file.name });
+                  if (file && field.id) {
+                    setPhotoFiles(prev => ({ ...prev, [fieldKey]: file }));
+                    onUpdate({ response_value: `pending_upload_${file.name}` });
                   }
                 }}
                 required={field.is_required}
               />
             </div>
-            {photoFile && (
+            {currentPhotoFile && (
               <div className="mt-2">
                 <img
-                  src={URL.createObjectURL(photoFile)}
+                  src={URL.createObjectURL(currentPhotoFile)}
                   alt="Preview"
                   className="h-32 w-32 object-cover rounded-lg"
                 />
+                <p className="text-sm text-gray-600 mt-1">
+                  File: {currentPhotoFile.name} ({(currentPhotoFile.size / 1024).toFixed(1)} KB)
+                </p>
               </div>
             )}
           </div>
         );
 
-      case FieldType.SIGNATURE:
+      case 'signature':
         return (
           <div className="space-y-4">
             <div className="border border-gray-300 rounded-md">
@@ -734,7 +897,7 @@ function FieldRenderer({
           </div>
         );
 
-      case FieldType.DATE:
+      case 'date':
         return (
           <input
             type="date"
@@ -745,7 +908,7 @@ function FieldRenderer({
           />
         );
 
-      case FieldType.DATETIME:
+      case 'datetime':
         const autoFillDateTime = field.field_options?.auto && !response.response_value;
         if (autoFillDateTime) {
           const now = new Date();
@@ -763,7 +926,7 @@ function FieldRenderer({
           />
         );
 
-      case FieldType.TIME:
+      case 'time':
         return (
           <input
             type="time"
@@ -772,6 +935,174 @@ function FieldRenderer({
             onChange={(e) => onUpdate({ response_value: e.target.value })}
             required={field.is_required}
           />
+        );
+
+      case 'subform':
+        // Get subform instances from responses or initialize with minimum instances
+        const subformInstancesKey = `${field.id}_subform_instances`;
+        const existingInstances = responses[subformInstancesKey]?.response_value ? 
+          JSON.parse(responses[subformInstancesKey].response_value) : [];
+        
+        const minInstances = field.field_options?.min_instances || 0;
+        const maxInstances = field.field_options?.max_instances || 0; // 0 means unlimited
+        
+        // Initialize with minimum instances if none exist
+        const currentInstances = existingInstances.length >= minInstances ? 
+          existingInstances : 
+          Array.from({ length: minInstances }, (_, i) => ({ id: `instance_${i}`, data: {} }));
+
+        const updateSubformInstances = (newInstances: any[]) => {
+          setResponses(prev => ({
+            ...prev,
+            [subformInstancesKey]: {
+              field_id: field.id || null,
+              response_value: JSON.stringify(newInstances),
+              pass_hold_status: undefined,
+              measurement_value: undefined
+            }
+          }));
+        };
+
+        const addInstance = () => {
+          if (maxInstances === 0 || currentInstances.length < maxInstances) {
+            const newInstance = { 
+              id: `instance_${Date.now()}`, 
+              data: {} 
+            };
+            const newInstances = [...currentInstances, newInstance];
+            updateSubformInstances(newInstances);
+          }
+        };
+
+        const removeInstance = (instanceIndex: number) => {
+          if (currentInstances.length > minInstances) {
+            const newInstances = currentInstances.filter((_: any, index: number) => index !== instanceIndex);
+            updateSubformInstances(newInstances);
+            
+            // Clean up responses for removed instance
+            field.field_options?.subform_fields?.forEach((subField: any) => {
+              const subFieldKey = `${field.id}_instance_${instanceIndex}_${subField.field_name}`;
+              setResponses(prev => {
+                const newResponses = { ...prev };
+                delete newResponses[subFieldKey];
+                return newResponses;
+              });
+            });
+          }
+        };
+
+        return (
+          <div className="space-y-4">
+            <div className="bg-gray-50 border border-gray-200 rounded-md p-4">
+              <div className="flex justify-between items-center mb-3">
+                <h4 className="text-sm font-medium text-gray-900">
+                  {field.field_name} ({currentInstances.length} instance{currentInstances.length !== 1 ? 's' : ''})
+                </h4>
+                <div className="flex space-x-2">
+                  {(maxInstances === 0 || currentInstances.length < maxInstances) && (
+                    <button
+                      type="button"
+                      onClick={addInstance}
+                      className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                    >
+                      + Add Instance
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              {currentInstances.map((instance: any, instanceIndex: number) => (
+                <div key={instance.id} className="mb-4 p-4 bg-white border border-gray-200 rounded-lg">
+                  <div className="flex justify-between items-center mb-3">
+                    <h5 className="text-sm font-medium text-gray-800">
+                      Instance {instanceIndex + 1}
+                    </h5>
+                    {currentInstances.length > minInstances && (
+                      <button
+                        type="button"
+                        onClick={() => removeInstance(instanceIndex)}
+                        className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  
+                  {field.field_options?.subform_fields?.map((subField: any, subIndex: number) => {
+                    // Generate unique key for this subfield response in this instance
+                    const subFieldKey = `${field.id}_instance_${instanceIndex}_${subField.field_name}`;
+                    const subFieldResponse = responses[subFieldKey] || {
+                      field_id: null,
+                      conditional_field_name: subField.field_name,
+                      conditional_parent_field_id: field.id,
+                      response_value: '',
+                      pass_hold_status: undefined,
+                      measurement_value: undefined
+                    };
+
+
+
+                    // Ensure proper field type conversion
+                    const normalizedFieldType = String(subField.field_type).toLowerCase();
+                    const fieldTypeEnum = normalizedFieldType as FieldType;
+
+                    // Debug logging for subform fields
+                    console.log(`🔍 SUBFORM DEBUG - Field: ${subField.field_name}`, {
+                      original_field_type: subField.field_type,
+                      normalized_field_type: normalizedFieldType,
+                      field_type_enum: fieldTypeEnum,
+                      field_options: subField.field_options,
+                      has_options: !!(subField.field_options?.options),
+                      options_array: subField.field_options?.options,
+                      options_length: subField.field_options?.options?.length || 0,
+                      is_dropdown: normalizedFieldType === 'dropdown',
+                      final_field_passed_to_renderer: {
+                        ...subField,
+                        id: null,
+                        field_type: fieldTypeEnum,
+                        field_options: subField.field_options || {}
+                      }
+                    });
+
+                    return (
+                      <div key={subIndex} className="mb-3">
+                        <label className="block text-sm font-medium text-gray-900 mb-1">
+                          {subField.field_name}
+                          {subField.is_required && <span className="text-red-500 ml-1">*</span>}
+                        </label>
+                        <FieldRenderer
+                          field={{
+                            ...subField,
+                            id: null, // Subfields don't have IDs
+                            field_type: fieldTypeEnum,
+                            field_options: subField.field_options || {}
+                          }}
+                          response={subFieldResponse}
+                          onUpdate={(updates) => {
+                            setResponses(prev => ({
+                              ...prev,
+                              [subFieldKey]: { ...subFieldResponse, ...updates }
+                            }));
+                          }}
+                          photoFiles={photoFiles}
+                          setPhotoFiles={setPhotoFiles}
+                          responses={responses}
+                          setResponses={setResponses}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+              
+              {minInstances > 0 && (
+                <p className="text-xs text-gray-500 mt-2">
+                  Minimum {minInstances} instance{minInstances !== 1 ? 's' : ''} required
+                  {maxInstances > 0 && `, maximum ${maxInstances} allowed`}
+                </p>
+              )}
+            </div>
+          </div>
         );
 
       default:
@@ -865,7 +1196,7 @@ function SearchableDropdown({
         value={searchTerm}
         onChange={handleInputChange}
         onFocus={() => setIsOpen(true)}
-        onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+        onBlur={() => setTimeout(() => setIsOpen(false), 300)}
         placeholder={placeholder}
         required={required}
         autoComplete="off"
@@ -877,7 +1208,10 @@ function SearchableDropdown({
             <div
               key={index}
               className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-gray-900"
-              onClick={() => handleSelect(option)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleSelect(option);
+              }}
             >
               {option}
             </div>

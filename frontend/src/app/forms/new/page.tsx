@@ -723,6 +723,40 @@ function NewFormContent() {
     setFields(newFields);
   };
 
+  // Function to prepare subform fields for save
+  const prepareFieldsForSave = (fields: any[]): any[] => {
+    return fields.map(field => {
+      const preparedField = { ...field };
+      
+      // Process subform fields: convert field_types array to field_type string
+      if (preparedField.field_type === 'SUBFORM' && preparedField.field_options?.subform_fields) {
+        preparedField.field_options.subform_fields = preparedField.field_options.subform_fields.map((subField: any) => {
+          const processedSubField = { ...subField };
+          
+          // Convert field_types array to single field_type
+          if (processedSubField.field_types && Array.isArray(processedSubField.field_types)) {
+            // Use the first field_type from the array, or default to 'text' if empty
+            processedSubField.field_type = processedSubField.field_types.length > 0 
+              ? processedSubField.field_types[0] 
+              : 'text';
+            
+            // Remove field_types array as backend expects field_type string
+            delete processedSubField.field_types;
+          }
+          
+          // Ensure field_type is not empty
+          if (!processedSubField.field_type || processedSubField.field_type.trim() === '') {
+            processedSubField.field_type = 'text';
+          }
+          
+          return processedSubField;
+        });
+      }
+      
+      return preparedField;
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -734,10 +768,13 @@ function NewFormContent() {
     setLoading(true);
 
     try {
+      // Prepare fields for save (process subform fields)
+      const preparedFields = prepareFieldsForSave(fields);
+      
       await formsAPI.createForm({
         form_name: formName,
         description,
-        fields,
+        fields: preparedFields,
       });
       toast.success('Form created successfully');
       router.push('/forms');
@@ -1681,7 +1718,7 @@ function NewFormContent() {
                                           const conditions = subField.conditional_logic || [];
                                           subFields[subIndex] = { 
                                             ...subFields[subIndex], 
-                                            conditional_logic: [...conditions, { field_index: '', dropdown_value: '', field_types: [], field_type: '' }]
+                                            conditional_logic: [...conditions, { field_index: '', dropdown_value: '', field_types: ['text'], field_type: 'text' }]
                                           };
                                           updateField(index, { field_options: { ...field.field_options, subform_fields: subFields } });
                                         }}
@@ -1808,7 +1845,7 @@ function NewFormContent() {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const subFields = [...(field.field_options?.subform_fields || []), { field_name: '', field_type: '' }];
+                                  const subFields = [...(field.field_options?.subform_fields || []), { field_name: '', field_type: 'text', field_types: ['text'] }];
                                   updateField(index, { 
                                     field_options: { ...field.field_options, subform_fields: subFields } 
                                   });
@@ -1834,21 +1871,21 @@ function NewFormContent() {
                         {/* Flag Conditions Section - For Button, Dropdown, and Measurement fields */}
                         {(field.field_type === FieldType.BUTTON || field.field_type === FieldType.DROPDOWN || field.field_type === FieldType.SEARCH_DROPDOWN || field.field_type === FieldType.MEASUREMENT || 
                           field.field_types?.includes(FieldType.BUTTON) || field.field_types?.includes(FieldType.DROPDOWN) || field.field_types?.includes(FieldType.SEARCH_DROPDOWN) || field.field_types?.includes(FieldType.MEASUREMENT)) && (
-                        <div className="md:col-span-2 mt-4 pt-4 border-t border-gray-200">
+                        <div className="md:col-span-2 mt-4 pt-4 border-t border-gray-200 bg-black p-4 rounded">
                           <div className="flex items-center justify-between mb-2">
-                            <label className="block text-xs font-medium text-gray-900">
+                            <label className="block text-xs font-medium text-white">
                               🚩 Flag Conditions (Mark as abnormal when...)
                             </label>
                           </div>
-                          <p className="text-xs text-gray-600 mb-3">
+                          <p className="text-xs text-gray-300 mb-3">
                             💡 Set conditions to automatically flag abnormal data for admin review
                           </p>
                           
                           <div className="space-y-3">
                             {/* Button Field Flag Conditions */}
                             {(field.field_type === FieldType.BUTTON || field.field_types?.includes(FieldType.BUTTON)) && (
-                              <div className="bg-red-50 p-3 rounded border border-red-200">
-                                <label className="block text-xs font-medium text-gray-900 mb-2">Flag when button value equals:</label>
+                              <div className="bg-gray-900 p-3 rounded border border-red-400">
+                                <label className="block text-xs font-medium text-white mb-2">Flag when button value equals:</label>
                                 <div className="space-y-2">
                                   {(field.field_options?.button_options || []).map((btn: any, btnIndex: number) => (
                                     <label key={btnIndex} className="flex items-center space-x-2 text-xs">
@@ -1881,8 +1918,8 @@ function NewFormContent() {
                             {/* Dropdown Field Flag Conditions */}
                             {(field.field_type === FieldType.DROPDOWN || field.field_type === FieldType.SEARCH_DROPDOWN || 
                               field.field_types?.includes(FieldType.DROPDOWN) || field.field_types?.includes(FieldType.SEARCH_DROPDOWN)) && (
-                              <div className="bg-red-50 p-3 rounded border border-red-200">
-                                <label className="block text-xs font-medium text-gray-900 mb-2">Flag when dropdown value equals:</label>
+                              <div className="bg-gray-900 p-3 rounded border border-red-400">
+                                <label className="block text-xs font-medium text-white mb-2">Flag when dropdown value equals:</label>
                                 <div className="space-y-2">
                                   {(field.field_options?.options || []).map((option: string, optIndex: number) => (
                                     <label key={optIndex} className="flex items-center space-x-2 text-xs">
@@ -1912,8 +1949,8 @@ function NewFormContent() {
 
                             {/* Measurement Field Flag Conditions */}
                             {(field.field_type === FieldType.MEASUREMENT || field.field_types?.includes(FieldType.MEASUREMENT)) && (
-                              <div className="bg-red-50 p-3 rounded border border-red-200">
-                                <label className="block text-xs font-medium text-gray-900 mb-2">Flag when measurement is out of range:</label>
+                              <div className="bg-gray-900 p-3 rounded border border-red-400">
+                                <label className="block text-xs font-medium text-white mb-2">Flag when measurement is out of range:</label>
                                 
                                 {/* Option to use measurement settings */}
                                 <div className="mb-3">
@@ -1934,7 +1971,7 @@ function NewFormContent() {
                                         });
                                       }}
                                     />
-                                    <span className="text-xs text-gray-700">
+                                    <span className="text-xs text-gray-300">
                                       Use measurement settings from above (Min: {field.measurement_min || 'Not set'}, Max: {field.measurement_max || 'Not set'})
                                     </span>
                                   </label>
@@ -1944,11 +1981,11 @@ function NewFormContent() {
                                 {!field.flag_conditions?.use_measurement_settings && (
                                   <div className="grid grid-cols-2 gap-3">
                                     <div>
-                                      <label className="block text-xs font-medium text-gray-700 mb-1">Minimum Value</label>
+                                      <label className="block text-xs font-medium text-white mb-1">Minimum Value</label>
                                       <input
                                         type="number"
                                         step="any"
-                                        className="w-full text-xs border border-gray-300 rounded px-2 py-1 text-gray-900"
+                                        className="w-full text-xs border border-gray-300 rounded px-2 py-1 text-gray-900 bg-white"
                                         placeholder="e.g., 0"
                                         value={field.flag_conditions?.min_value || ''}
                                         onChange={(e) => updateField(index, {
@@ -1960,11 +1997,11 @@ function NewFormContent() {
                                       />
                                     </div>
                                     <div>
-                                      <label className="block text-xs font-medium text-gray-700 mb-1">Maximum Value</label>
+                                      <label className="block text-xs font-medium text-white mb-1">Maximum Value</label>
                                       <input
                                         type="number"
                                         step="any"
-                                        className="w-full text-xs border border-gray-300 rounded px-2 py-1 text-gray-900"
+                                        className="w-full text-xs border border-gray-300 rounded px-2 py-1 text-gray-900 bg-white"
                                         placeholder="e.g., 100"
                                         value={field.flag_conditions?.max_value || ''}
                                         onChange={(e) => updateField(index, {
@@ -1980,17 +2017,17 @@ function NewFormContent() {
 
                                 {/* Show current values when using measurement settings */}
                                 {field.flag_conditions?.use_measurement_settings && (
-                                  <div className="bg-blue-50 p-2 rounded border border-blue-200">
-                                    <p className="text-xs text-blue-800">
+                                  <div className="bg-gray-800 p-2 rounded border border-blue-400">
+                                    <p className="text-xs text-blue-300">
                                       <strong>Current flag range:</strong> Min: {field.measurement_min || 'Not set'}, Max: {field.measurement_max || 'Not set'}
                                     </p>
-                                    <p className="text-xs text-blue-600 mt-1">
+                                    <p className="text-xs text-blue-200 mt-1">
                                       Values will be automatically updated when you change the measurement settings above.
                                     </p>
                                   </div>
                                 )}
 
-                                <p className="text-xs text-gray-600 mt-2">
+                                <p className="text-xs text-gray-300 mt-2">
                                   Values outside this range will be flagged as abnormal
                                 </p>
                               </div>

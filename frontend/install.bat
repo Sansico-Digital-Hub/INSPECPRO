@@ -32,7 +32,7 @@ echo.
 echo ========================================
 echo Next steps:
 echo 1. Run: npm run dev
-echo 2. Open: http://localhost:3000
+echo 2. Open: http://localhost:3002
 echo 3. Login with test accounts:
 echo    - Admin: admin / admin123
 echo    - Inspector: inspector / inspector123

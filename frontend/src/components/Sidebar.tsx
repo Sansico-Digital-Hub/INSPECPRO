@@ -38,7 +38,7 @@ export default function Sidebar() {
         {/* Logo & Toggle */}
         <div className="flex h-16 items-center justify-between px-4 border-b border-gray-800">
           {!isCollapsed && (
-            <h1 className="text-xl font-bold text-white">InsPecPro</h1>
+            <h1 className="text-xl font-bold text-white">Sanalyze</h1>
           )}
           <button
             onClick={toggleSidebar}

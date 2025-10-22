@@ -9,7 +9,7 @@ load_dotenv()  # Load main .env file
 load_dotenv('.env.email')  # Load email configuration if exists
 
 # MySQL Database Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://root:Databaseya789@localhost:3306/inspecpro")
+DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://root:Databaseya789@localhost:3306/sanalyze")
 
 # Create engine with MySQL-specific settings
 engine = create_engine(

@@ -6,6 +6,7 @@ from database import get_db
 from models import User, Form, FormField, InspectionResponse
 from schemas import FormCreate, FormUpdate, FormResponse, FormFieldCreate
 from auth import get_current_user, require_role
+from validators import validate_form_field_before_save, SubformValidationError
 
 router = APIRouter()
 
@@ -35,6 +36,28 @@ async def get_form(
         )
     return form
 
+def validate_subform_fields(field_data):
+    """Validate subform fields using the comprehensive validator"""
+    try:
+        # Convert field_data to dict if it's a Pydantic model
+        if hasattr(field_data, 'dict'):
+            field_dict = field_data.dict()
+        else:
+            field_dict = field_data
+        
+        # Use the comprehensive validator
+        validated_field = validate_form_field_before_save(field_dict)
+        
+        # Update the original field_data with validated values
+        if hasattr(field_data, 'field_options') and 'field_options' in validated_field:
+            field_data.field_options = validated_field['field_options']
+            
+    except SubformValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
 @router.post("/", response_model=FormResponse)
 async def create_form(
     form: FormCreate,
@@ -42,6 +65,10 @@ async def create_form(
     db: Session = Depends(get_db)
 ):
     """Create new form (Admin only)"""
+    # Validate all fields including subform fields
+    for field_data in form.fields:
+        validate_subform_fields(field_data)
+    
     # Create form
     db_form = Form(
         form_name=form.form_name,
@@ -207,6 +234,9 @@ async def add_form_field(
             detail="Form not found"
         )
     
+    # Validate subform fields before adding
+    validate_subform_fields(field)
+    
     db_field = FormField(
         form_id=form_id,
         field_name=field.field_name,
@@ -275,6 +305,10 @@ async def update_form_complete(
     
     # Track which fields are in the update
     updated_field_ids = set()
+    
+    # Validate all fields including subform fields before processing
+    for field_data in form_data.fields:
+        validate_subform_fields(field_data)
     
     # Update or create fields
     for field_data in form_data.fields:

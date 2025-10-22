@@ -54,6 +54,60 @@ export default function EditInspectionPage() {
       };
     });
     
+    // Special handling for subform fields - initialize subform instances
+    if (field.field_type === 'subform') {
+      const subformInstancesKey = `${field.id}_subform_instances`;
+      
+      // Check if there's an existing subform instances response
+      const existingSubformResponse = existingResponses.find(r => 
+        r.field_id === field.id && r.response_value && r.response_value.startsWith('[')
+      );
+      
+      if (existingSubformResponse) {
+        // Use existing subform instances data
+        initialResponses[subformInstancesKey] = existingSubformResponse;
+        console.log(`🔧 Initialized existing subform instances for ${field.field_name}:`, existingSubformResponse.response_value);
+        
+        // Extract individual subfield values from instance data and populate individual responses
+        try {
+          const instances = JSON.parse(existingSubformResponse.response_value || '[]');
+          instances.forEach((instance: any, instanceIndex: number) => {
+            if (instance.data && typeof instance.data === 'object') {
+              // Iterate through each field in the instance data
+              Object.entries(instance.data).forEach(([fieldName, fieldValue]) => {
+                const subFieldKey = `${field.id}_instance_${instanceIndex}_${fieldName}`;
+                initialResponses[subFieldKey] = {
+                  field_id: null,
+                  conditional_field_name: fieldName,
+                  conditional_parent_field_id: field.id,
+                  response_value: String(fieldValue || ''),
+                  measurement_value: undefined,
+                  pass_hold_status: undefined
+                };
+                console.log(`🔧 Populated subfield ${subFieldKey} with value:`, fieldValue);
+              });
+            }
+          });
+        } catch (error) {
+          console.error('Error parsing existing subform data:', error);
+        }
+      } else {
+        // Initialize with minimum instances if specified
+        const minInstances = field.field_options?.min_instances || 0;
+        const initialInstances = minInstances > 0 
+          ? Array.from({ length: minInstances }, (_, i) => ({ id: `instance_${i}`, data: {} }))
+          : [];
+        
+        initialResponses[subformInstancesKey] = {
+          field_id: field.id || null,
+          response_value: JSON.stringify(initialInstances),
+          measurement_value: undefined,
+          pass_hold_status: undefined
+        };
+        console.log(`🔧 Initialized new subform instances for ${field.field_name} with ${minInstances} minimum instances`);
+      }
+    }
+    
     // Recursively initialize conditional fields
     if (field.has_conditional && field.conditional_rules) {
       field.conditional_rules.forEach((rule, ruleIndex) => {
@@ -110,9 +164,25 @@ export default function EditInspectionPage() {
       normalizedForm.fields.forEach((field, idx) => {
         console.log(`Field ${idx + 1}:`, {
           name: field.field_name,
+          field_type: field.field_type,
+          field_options: field.field_options,
           has_conditional: field.has_conditional,
           conditional_rules: field.conditional_rules
         });
+        
+        // Special logging for dropdown fields
+        if (field.field_type === 'dropdown') {
+          console.log(`🎯 DROPDOWN FIELD DETAILED ANALYSIS:`, {
+            field_name: field.field_name,
+            field_options_type: typeof field.field_options,
+            field_options_value: field.field_options,
+            options_property: field.field_options?.options,
+            options_type: typeof field.field_options?.options,
+            options_is_array: Array.isArray(field.field_options?.options),
+            options_length: field.field_options?.options?.length,
+            full_field_structure: JSON.stringify(field, null, 2)
+          });
+        }
       });
       
       setForm(normalizedForm);
@@ -133,11 +203,35 @@ export default function EditInspectionPage() {
   };
 
   const updateResponse = (fieldId: string, updates: Partial<InspectionResponse>) => {
-    setResponses(prev => ({
-      ...prev,
-      [fieldId]: { ...prev[fieldId], ...updates }
-    }));
+    console.log(`=== updateResponse CALLED ===`);
+    console.log(`fieldId: ${fieldId} (type: ${typeof fieldId})`);
+    console.log(`updates:`, updates);
+    
+    // Check if this is a subfield response
+    const isSubfield = typeof fieldId === 'string' && fieldId.includes('_instance_');
+    console.log(`Is subfield: ${isSubfield}`);
+    
+    if (isSubfield) {
+      console.log(`🔥 SUBFIELD RESPONSE DETECTED: ${fieldId}`);
+      console.log(`🔥 SUBFIELD UPDATE DATA:`, updates);
+    }
+    
+    setResponses(prev => {
+      const updated = {
+        ...prev,
+        [fieldId]: { ...prev[fieldId], ...updates }
+      };
+      console.log(`Updated responses keys:`, Object.keys(updated));
+      if (isSubfield) {
+        console.log(`🔥 SUBFIELD STORED IN RESPONSES:`, updated[fieldId]);
+      }
+      return updated;
+    });
+    
+    console.log(`=== updateResponse END ===`);
   };
+
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -150,12 +244,99 @@ export default function EditInspectionPage() {
     setSaving(true);
 
     try {
+      // Process subform data to properly serialize field values into instance data
+      const processedResponses = { ...responses };
+      
+      console.log('=== SUBFORM DEBUG START ===');
+      console.log('All responses before processing:', processedResponses);
+      console.log('Response keys:', Object.keys(processedResponses));
+      console.log('Subfield response keys:', Object.keys(processedResponses).filter(key => key.includes('_instance_')));
+      
+      // Find all subform fields
+      const subformFields = form.fields.filter(field => field.field_type === 'subform');
+      console.log('Found subform fields:', subformFields.map(f => ({ id: f.id, name: f.field_name })));
+      
+      for (const subformField of subformFields) {
+        const subformInstancesKey = `${subformField.id}_subform_instances`;
+        const subformResponse = processedResponses[subformInstancesKey];
+        
+        console.log(`Processing subform ${subformField.field_name} (ID: ${subformField.id})`);
+        console.log(`Looking for key: ${subformInstancesKey}`);
+        console.log(`Subform response:`, subformResponse);
+        
+        if (subformResponse && subformResponse.response_value) {
+          try {
+            const instances = JSON.parse(subformResponse.response_value);
+            console.log(`Parsed instances:`, instances);
+            
+            // For each instance, collect the subfield data
+            const updatedInstances = instances.map((instance: any, instanceIndex: number) => {
+              const instanceData: any = {};
+              
+              console.log(`Processing instance ${instanceIndex} with ID ${instance.id}`);
+              
+              // Collect all subfield responses for this instance
+              subformField.field_options?.subform_fields?.forEach((subField: any) => {
+                // The key uses the array index, not the instance ID
+                const subFieldKey = `${subformField.id}_instance_${instanceIndex}_${subField.field_name}`;
+                const subFieldResponse = processedResponses[subFieldKey];
+                
+                console.log(`  Looking for subfield key: ${subFieldKey}`);
+                console.log(`  Subfield response:`, subFieldResponse);
+                
+                if (subFieldResponse && (subFieldResponse.response_value || subFieldResponse.measurement_value !== undefined)) {
+                  // Store the field value in the instance data
+                  const value = subFieldResponse.response_value || subFieldResponse.measurement_value;
+                  instanceData[subField.field_name] = value;
+                  console.log(`    Added value: ${subField.field_name} = ${value}`);
+                } else {
+                  console.log(`    No response found for ${subFieldKey}`);
+                }
+              });
+              
+              console.log(`  Final instance data for ${instance.id}:`, instanceData);
+              
+              return {
+                ...instance,
+                data: instanceData
+              };
+            });
+            
+            // Update the subform response with the properly structured data
+            processedResponses[subformInstancesKey] = {
+              ...subformResponse,
+              response_value: JSON.stringify(updatedInstances)
+            };
+            
+            console.log(`Updated subform ${subformField.field_name} instances:`, updatedInstances);
+          } catch (error) {
+            console.error(`Error processing subform ${subformField.field_name}:`, error);
+          }
+        } else {
+          console.log(`No subform response found for ${subformInstancesKey}`);
+        }
+      }
+      
+      console.log('=== SUBFORM DEBUG END ===');
+
+      // Filter out individual subfield responses - only send main field responses and subform instance responses
+      const finalResponses = Object.entries(processedResponses)
+        .filter(([key, response]) => {
+          // Exclude individual subfield responses (they contain '_instance_' but don't end with '_subform_instances')
+          if (key.includes('_instance_') && !key.endsWith('_subform_instances')) {
+            console.log(`Excluding subfield response: ${key}`);
+            return false;
+          }
+          // Include responses that have actual values
+          return response.response_value || response.measurement_value !== undefined;
+        })
+        .map(([key, response]) => response);
+
       const inspectionData = {
-        responses: Object.values(responses).filter(response => 
-          response.response_value || response.measurement_value !== undefined
-        )
+        responses: finalResponses
       };
 
+      console.log('Submitting inspection data:', inspectionData);
       await inspectionsAPI.updateInspection(inspectionId, inspectionData);
       toast.success('Inspection updated successfully');
       router.push('/inspections');
@@ -197,7 +378,7 @@ export default function EditInspectionPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
-              <h1 className="text-xl font-bold text-gray-900">InsPecPro</h1>
+              <h1 className="text-xl font-bold text-gray-900">Sanalyze</h1>
               <div className="ml-10 flex items-baseline space-x-4">
                 <a href="/dashboard" className="text-gray-800 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium">
                   Dashboard
@@ -244,6 +425,7 @@ export default function EditInspectionPage() {
                       field={field}
                       responses={responses}
                       updateResponse={updateResponse}
+                      setResponses={setResponses}
                     />
                   ))}
               </div>
@@ -277,13 +459,15 @@ function MultiTypeFieldRenderer({
   responses,
   updateResponse,
   depth = 0,
-  parentPath = ''  // Track parent path for unique keys
+  parentPath = '',  // Track parent path for unique keys
+  setResponses
 }: {
   field: FormField;
   responses: Record<string, InspectionResponse>;
   updateResponse: (fieldId: string, updates: Partial<InspectionResponse>) => void;
   depth?: number;
   parentPath?: string;
+  setResponses: React.Dispatch<React.SetStateAction<Record<string, InspectionResponse>>>;
 }) {
   // Generate unique key for this field (same logic as initializeFieldResponses)
   const fieldKey = field.id 
@@ -362,6 +546,8 @@ function MultiTypeFieldRenderer({
                 field={typeSpecificField}
                 response={response}
                 onUpdate={(updates) => updateResponse(responseKey, updates)}
+                responses={responses}
+                setResponses={setResponses}
               />
             </div>
           );
@@ -387,6 +573,7 @@ function MultiTypeFieldRenderer({
                 updateResponse={updateResponse}
                 depth={depth + 1}
                 parentPath={newParentPath}
+                setResponses={setResponses}
               />
             );
           })}
@@ -399,11 +586,15 @@ function MultiTypeFieldRenderer({
 function FieldRenderer({
   field,
   response,
-  onUpdate
+  onUpdate,
+  responses,
+  setResponses
 }: {
   field: FormField;
   response: InspectionResponse;
   onUpdate: (updates: Partial<InspectionResponse>) => void;
+  responses: Record<string, InspectionResponse>;
+  setResponses: React.Dispatch<React.SetStateAction<Record<string, InspectionResponse>>>;
 }) {
   const [signatureRef, setSignatureRef] = useState<SignatureCanvas | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -452,6 +643,18 @@ function FieldRenderer({
         );
 
       case FieldType.DROPDOWN:
+        // Debug logging for dropdown field
+        const options = field.field_options?.options || [];
+        console.log(`🎯 Dropdown field debug:`, {
+          field_name: field.field_name,
+          field_options: field.field_options,
+          options: options,
+          options_type: typeof options,
+          options_is_array: Array.isArray(options),
+          options_length: options.length,
+          full_field: field
+        });
+        
         return (
           <select
             className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-gray-900"
@@ -460,7 +663,7 @@ function FieldRenderer({
             required={field.is_required}
           >
             <option value="">Select an option</option>
-            {field.field_options?.options?.map((option: string, index: number) => (
+            {Array.isArray(options) && options.map((option: string, index: number) => (
               <option key={index} value={option}>
                 {option}
               </option>
@@ -662,6 +865,165 @@ function FieldRenderer({
           </div>
         );
 
+      case FieldType.SUBFORM:
+        // Get subform instances from responses or initialize with minimum instances
+        const subformInstancesKey = `${field.id}_subform_instances`;
+        const existingInstances = responses[subformInstancesKey]?.response_value ? 
+          JSON.parse(responses[subformInstancesKey].response_value) : [];
+        
+        const minInstances = field.field_options?.min_instances || 0;
+        const maxInstances = field.field_options?.max_instances || 0; // 0 means unlimited
+        
+        // Initialize with minimum instances if none exist
+        const currentInstances = existingInstances.length >= minInstances ? 
+          existingInstances : 
+          Array.from({ length: minInstances }, (_, i) => ({ id: `instance_${i}`, data: {} }));
+
+        const updateSubformInstances = (newInstances: any[]) => {
+           setResponses(prev => ({
+             ...prev,
+             [subformInstancesKey]: {
+               field_id: field.id || null,
+               response_value: JSON.stringify(newInstances),
+               pass_hold_status: undefined,
+               measurement_value: undefined
+             }
+           }));
+         };
+
+        const addInstance = () => {
+          if (maxInstances === 0 || currentInstances.length < maxInstances) {
+            const newInstance = { 
+              id: `instance_${Date.now()}`, 
+              data: {} 
+            };
+            const newInstances = [...currentInstances, newInstance];
+            updateSubformInstances(newInstances);
+          }
+        };
+
+        const removeInstance = (instanceIndex: number) => {
+           if (currentInstances.length > minInstances) {
+             const newInstances = currentInstances.filter((_: any, index: number) => index !== instanceIndex);
+            updateSubformInstances(newInstances);
+            
+            // Clean up responses for removed instance
+            field.field_options?.subform_fields?.forEach((subField: any) => {
+              const subFieldKey = `${field.id}_instance_${instanceIndex}_${subField.field_name}`;
+              setResponses(prev => {
+                const newResponses = { ...prev };
+                delete newResponses[subFieldKey];
+                return newResponses;
+              });
+            });
+          }
+        };
+
+        return (
+          <div className="space-y-4">
+            <div className="bg-gray-50 border border-gray-200 rounded-md p-4">
+              <div className="flex justify-between items-center mb-3">
+                <h4 className="text-sm font-medium text-gray-900">
+                  {field.field_name} ({currentInstances.length} instance{currentInstances.length !== 1 ? 's' : ''})
+                </h4>
+                <div className="flex space-x-2">
+                  {(maxInstances === 0 || currentInstances.length < maxInstances) && (
+                    <button
+                      type="button"
+                      onClick={addInstance}
+                      className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                    >
+                      + Add Instance
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              {currentInstances.map((instance: any, instanceIndex: number) => (
+                <div key={instance.id} className="mb-4 p-4 bg-white border border-gray-200 rounded-lg">
+                  <div className="flex justify-between items-center mb-3">
+                    <h5 className="text-sm font-medium text-gray-800">
+                      Instance {instanceIndex + 1}
+                    </h5>
+                    {currentInstances.length > minInstances && (
+                      <button
+                        type="button"
+                        onClick={() => removeInstance(instanceIndex)}
+                        className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  
+                  {field.field_options?.subform_fields?.map((subField: any, subIndex: number) => {
+                    // Generate unique key for this subfield response in this instance
+                    const subFieldKey = `${field.id}_instance_${instanceIndex}_${subField.field_name}`;
+                    const subFieldResponse = responses[subFieldKey] || {
+                      field_id: null,
+                      conditional_field_name: subField.field_name,
+                      conditional_parent_field_id: field.id,
+                      response_value: '',
+                      pass_hold_status: undefined,
+                      measurement_value: undefined
+                    };
+
+                    return (
+                      <div key={subIndex} className="mb-3">
+                        <label className="block text-sm font-medium text-gray-900 mb-1">
+                          {subField.field_name}
+                          {subField.is_required && <span className="text-red-500 ml-1">*</span>}
+                        </label>
+                        <FieldRenderer
+                          field={{
+                            ...subField,
+                            id: null, // Subfields don't have IDs
+                            field_type: subField.field_type as FieldType,
+                            field_options: subField.field_options
+                          }}
+                          response={subFieldResponse}
+                          onUpdate={(updates) => {
+                            console.log(`🔍 SUBFIELD UPDATE - Key: ${subFieldKey}`);
+                            console.log(`🔍 SUBFIELD UPDATE - Updates:`, updates);
+                            console.log(`🔍 SUBFIELD UPDATE - Field name: ${subField.field_name}`);
+                            console.log(`🔍 SUBFIELD UPDATE - Instance index: ${instanceIndex}`);
+                            console.log(`🔍 SUBFIELD UPDATE - Parent field ID: ${field.id}`);
+                            
+                            setResponses(prev => {
+                              const updated = {
+                                ...prev,
+                                [subFieldKey]: {
+                                  field_id: null,
+                                  conditional_field_name: subField.field_name,
+                                  conditional_parent_field_id: field.id,
+                                  ...updates
+                                }
+                              };
+                              console.log(`📝 STORED RESPONSE for ${subFieldKey}:`, updated[subFieldKey]);
+                              console.log(`🗂️ ALL SUBFIELD KEYS:`, Object.keys(updated).filter(k => k.includes('_instance_')));
+                              console.log(`🗂️ TOTAL RESPONSES COUNT:`, Object.keys(updated).length);
+                              return updated;
+                            });
+                          }}
+                          responses={responses}
+                          setResponses={setResponses}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+              
+              {minInstances > 0 && (
+                <p className="text-xs text-gray-500 mt-2">
+                  Minimum {minInstances} instance{minInstances !== 1 ? 's' : ''} required
+                  {maxInstances > 0 && `, maximum ${maxInstances} allowed`}
+                </p>
+              )}
+            </div>
+          </div>
+        );
+
       default:
         return (
           <input
@@ -735,7 +1097,7 @@ function SearchableDropdown({
         value={searchTerm}
         onChange={handleInputChange}
         onFocus={() => setIsOpen(true)}
-        onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+        onBlur={() => setTimeout(() => setIsOpen(false), 300)}
         placeholder={placeholder}
         required={required}
         autoComplete="off"
@@ -747,7 +1109,10 @@ function SearchableDropdown({
             <div
               key={index}
               className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-gray-900"
-              onClick={() => handleSelect(option)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleSelect(option);
+              }}
             >
               {option}
             </div>

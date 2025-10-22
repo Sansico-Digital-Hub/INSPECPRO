@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { inspectionsAPI, formsAPI } from '@/lib/api';
 import { Inspection, Form, InspectionStatus, UserRole, FieldType } from '@/types';
-import { ArrowLeftIcon, CheckIcon, XMarkIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, CheckIcon, XMarkIcon, ArrowDownTrayIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 
 export default function InspectionDetailPage() {
@@ -135,14 +135,14 @@ export default function InspectionDetailPage() {
                           {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
                         </div>
                       )}
-                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                      <div className={response?.is_flagged ? 'font-medium text-black' : ''}>
                         Value: {response?.measurement_value ?? 'N/A'}
                       </div>
-                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                      <div className={response?.is_flagged ? 'font-medium text-black' : ''}>
                         Status: {response?.pass_hold_status ?? 'N/A'}
                       </div>
                       {response?.is_flagged && (
-                        <div className="mt-1 text-xs text-red-600 font-medium">
+                        <div className="mt-1 text-xs text-black font-medium">
                           ⚠️ This response has been flagged as abnormal
                         </div>
                       )}
@@ -223,6 +223,55 @@ export default function InspectionDetailPage() {
                       )}
                     </div>
                   );
+                } else if (fieldType === FieldType.SUBFORM) {
+                  // Parse subform instances from response
+                  let instances = [];
+                  try {
+                    if (response?.response_value) {
+                      instances = JSON.parse(response.response_value);
+                    }
+                  } catch (error) {
+                    console.error('Error parsing subform data:', error);
+                  }
+
+                  return (
+                    <div key={typeIndex} className={`border-l-2 ${colorScheme.border} pl-3`}>
+                      {fieldTypes.length > 1 && (
+                        <div className="text-xs font-semibold text-gray-700 mb-1">
+                          {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
+                        </div>
+                      )}
+                      {instances.length > 0 ? (
+                        <div className="space-y-4">
+                          {instances.map((instance: any, instanceIndex: number) => (
+                            <div key={instance.id || instanceIndex} className="bg-gray-50 border border-gray-200 rounded-md p-4">
+                              <h5 className="text-sm font-medium text-gray-800 mb-3">
+                                Instance {instanceIndex + 1}
+                              </h5>
+                              {instance.data && Object.keys(instance.data).length > 0 ? (
+                                <div className="space-y-2">
+                                  {Object.entries(instance.data).map(([question, answer]) => (
+                                    <div key={question} className="grid grid-cols-2 gap-4 py-2 border-b border-gray-200 last:border-b-0">
+                                      <div className="text-sm font-medium text-gray-700">
+                                        {question}:
+                                      </div>
+                                      <div className="text-sm text-gray-900">
+                                        {String(answer || 'No response')}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-sm text-gray-500">No data in this instance</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-gray-500">No subform instances</div>
+                      )}
+                    </div>
+                  );
                 } else if (fieldType === FieldType.BUTTON) {
                   return (
                     <div key={typeIndex} className={`border-l-2 ${response?.is_flagged ? 'border-red-500 bg-red-50' : colorScheme.border} pl-3 ${response?.is_flagged ? 'rounded-md p-2' : ''}`}>
@@ -231,11 +280,11 @@ export default function InspectionDetailPage() {
                           {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
                         </div>
                       )}
-                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                      <div className={response?.is_flagged ? 'font-medium text-black' : ''}>
                         Status: {response?.pass_hold_status ?? 'No selection'}
                       </div>
                       {response?.is_flagged && (
-                        <div className="mt-1 text-xs text-red-600 font-medium">
+                        <div className="mt-1 text-xs text-black font-medium">
                           ⚠️ This response has been flagged as abnormal
                         </div>
                       )}
@@ -249,11 +298,11 @@ export default function InspectionDetailPage() {
                           {fieldType.charAt(0).toUpperCase() + fieldType.slice(1).replace('_', ' ')}:
                         </div>
                       )}
-                      <div className={response?.is_flagged ? 'font-medium text-red-800' : ''}>
+                      <div className={response?.is_flagged ? 'font-medium text-black' : ''}>
                         {response?.response_value || 'No response'}
                       </div>
                       {response?.is_flagged && (
-                        <div className="mt-1 text-xs text-red-600 font-medium">
+                        <div className="mt-1 text-xs text-black font-medium">
                           ⚠️ This response has been flagged as abnormal
                         </div>
                       )}
@@ -310,7 +359,7 @@ export default function InspectionDetailPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
-              <h1 className="text-xl font-bold text-gray-900">InsPecPro</h1>
+              <h1 className="text-xl font-bold text-gray-900">Sanalyze</h1>
               <div className="ml-10 flex items-baseline space-x-4">
                 <a href="/dashboard" className="text-gray-800 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium">
                   Dashboard
@@ -347,9 +396,17 @@ export default function InspectionDetailPage() {
             
             <div className="flex justify-between items-start">
               <div>
-                <h2 className="text-2xl font-bold text-gray-900">
-                  Inspection #{inspection.id}
-                </h2>
+                <div className="flex items-center">
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    Inspection #{inspection.id}
+                  </h2>
+                  {inspection.has_flags && (
+                    <ExclamationTriangleIcon 
+                      className="h-6 w-6 text-amber-500 ml-3" 
+                      title="Warning: This inspection has flagged responses"
+                    />
+                  )}
+                </div>
                 <p className="text-gray-800 mt-1">Form: {form.form_name}</p>
                 <p className="text-gray-800">Created: {new Date(inspection.created_at).toLocaleString()}</p>
                 {inspection.reviewed_at && (

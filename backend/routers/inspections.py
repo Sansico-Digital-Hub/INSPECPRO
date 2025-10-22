@@ -9,7 +9,7 @@ from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image, KeepTogether
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 from reportlab.lib.utils import ImageReader
 from io import BytesIO
@@ -27,6 +27,7 @@ from models import (
     InspectionFile,
     Form,
     FormField,
+    FieldType,
     InspectionStatus as ModelInspectionStatus,
     PassHoldStatus as ModelPassHoldStatus,
 )
@@ -53,7 +54,7 @@ async def get_inspections(
     db: Session = Depends(get_db)
 ):
     """Get inspections based on user role"""
-    query = db.query(Inspection)
+    query = db.query(Inspection).join(Form, Inspection.form_id == Form.id).join(User, Inspection.inspector_id == User.id)
     
     # Filter based on user role
     if current_user.role.value == "user":
@@ -68,6 +69,16 @@ async def get_inspections(
         query = query.filter(Inspection.status == status_filter_enum)
     
     inspections = query.offset(skip).limit(limit).all()
+    
+    # Add computed fields
+    for inspection in inspections:
+        inspection.has_flags = any(response.is_flagged for response in inspection.responses)
+        # Get form name and inspector username
+        form = db.query(Form).filter(Form.id == inspection.form_id).first()
+        inspector = db.query(User).filter(User.id == inspection.inspector_id).first()
+        inspection.form_name = form.form_name if form else None
+        inspection.inspector_username = inspector.username if inspector else None
+    
     return inspections
 
 @router.get("/my-inspections", response_model=List[InspectionResponseSchema])
@@ -81,6 +92,11 @@ async def get_my_inspections(
     inspections = db.query(Inspection).filter(
         Inspection.inspector_id == current_user.id
     ).offset(skip).limit(limit).all()
+    
+    # Add has_flags computed field
+    for inspection in inspections:
+        inspection.has_flags = any(response.is_flagged for response in inspection.responses)
+    
     return inspections
 
 @router.get("/export-excel")
@@ -196,13 +212,13 @@ async def export_inspections_to_excel(
     
     # === POPULATE SUMMARY SHEET ===
     # Summary sheet title
-    summary_ws['A1'] = "📊 INSPECTION EXPORT SUMMARY"
+    summary_ws['A1'] = "INSPECTION EXPORT SUMMARY"
     summary_ws['A1'].font = Font(name='Calibri', size=16, bold=True, color='1E40AF')
     summary_ws.merge_cells('A1:D1')
     summary_ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
     
     # Export details section
-    summary_ws['A3'] = "📋 Export Details"
+    summary_ws['A3'] = "Export Details"
     summary_ws['A3'].font = Font(name='Calibri', size=12, bold=True, color='1E40AF')
     summary_ws['A3'].fill = subheader_fill
     
@@ -227,7 +243,7 @@ async def export_inspections_to_excel(
         status = inspection.status.value
         status_counts[status] = status_counts.get(status, 0) + 1
     
-    summary_ws['A10'] = "📊 Status Distribution"
+    summary_ws['A10'] = "Status Distribution"
     summary_ws['A10'].font = Font(name='Calibri', size=12, bold=True, color='1E40AF')
     summary_ws['A10'].fill = subheader_fill
     
@@ -520,18 +536,22 @@ async def export_inspections_to_excel(
         adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
         ws.column_dimensions[column_letter].width = adjusted_width
     
-    # Save to file
+    # Save to memory buffer
     excel_filename = f"inspections_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    excel_path = os.path.join("uploads", excel_filename)
-    os.makedirs("uploads", exist_ok=True)
+    excel_buffer = BytesIO()
     
-    wb.save(excel_path)
+    wb.save(excel_buffer)
     
-    # Return the Excel file
-    return FileResponse(
-        excel_path,
+    # Get Excel content from buffer
+    excel_buffer.seek(0)
+    excel_content = excel_buffer.getvalue()
+    excel_buffer.close()
+    
+    # Return the Excel file directly from memory
+    from fastapi.responses import Response
+    return Response(
+        content=excel_content,
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        filename=excel_filename,
         headers={"Content-Disposition": f"attachment; filename={excel_filename}"}
     )
 
@@ -556,6 +576,9 @@ async def get_inspection(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
         )
+    
+    # Add has_flags computed field
+    inspection.has_flags = any(response.is_flagged for response in inspection.responses)
     
     return inspection
 
@@ -809,10 +832,25 @@ async def delete_inspection(
             detail="Not enough permissions"
         )
     
-    db.delete(inspection)
-    db.commit()
-    
-    return {"message": "Inspection deleted successfully"}
+    try:
+        # Delete related data first to avoid foreign key constraint errors
+        # Delete inspection responses
+        db.query(InspectionResponse).filter(InspectionResponse.inspection_id == inspection_id).delete()
+        
+        # Delete inspection files
+        db.query(InspectionFile).filter(InspectionFile.inspection_id == inspection_id).delete()
+        
+        # Now delete the inspection itself
+        db.delete(inspection)
+        db.commit()
+        
+        return {"message": "Inspection deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting inspection: {str(e)}"
+        )
 
 @router.post("/{inspection_id}/upload-file")
 async def upload_file(
@@ -910,6 +948,113 @@ async def upload_file(
         "file_hash": file_metadata['hash']
     }
 
+def process_image_for_pdf(base64_data: str, max_width: float, max_height: float, field_id: int, image_type: str = "image"):
+    """
+    Robust image processing function for PDF export
+    Returns ReportLab Image object or None if processing fails
+    """
+    try:
+        logger.info(f"Processing {image_type} for field {field_id}: Starting processing")
+        
+        # Validate input
+        if not base64_data or not isinstance(base64_data, str):
+            logger.error(f"Processing {image_type} for field {field_id}: Invalid base64 data")
+            return None
+        
+        # Clean base64 data
+        clean_data = base64_data.strip()
+        
+        # Remove data URL prefix if present
+        if clean_data.startswith('data:image'):
+            if ',' not in clean_data:
+                logger.error(f"Processing {image_type} for field {field_id}: Invalid data URL format")
+                return None
+            clean_data = clean_data.split(',')[1]
+        
+        # Add padding if necessary
+        missing_padding = len(clean_data) % 4
+        if missing_padding:
+            clean_data += '=' * (4 - missing_padding)
+        
+        # Decode base64
+        try:
+            image_data = base64.b64decode(clean_data)
+        except Exception as e:
+            logger.error(f"Processing {image_type} for field {field_id}: Base64 decode error: {e}")
+            return None
+        
+        # Validate decoded data
+        if len(image_data) < 100:  # Minimum reasonable image size
+            logger.error(f"Processing {image_type} for field {field_id}: Image data too small")
+            return None
+        
+        # Create PIL Image
+        image_buffer = BytesIO(image_data)
+        try:
+            pil_image = PILImage.open(image_buffer)
+            pil_image.verify()  # Verify image integrity
+            
+            # Reopen image after verify (verify closes the image)
+            image_buffer.seek(0)
+            pil_image = PILImage.open(image_buffer)
+        except Exception as e:
+            logger.error(f"Processing {image_type} for field {field_id}: PIL Image error: {e}")
+            return None
+        
+        # Convert to RGB if necessary
+        if pil_image.mode not in ['RGB', 'L']:
+            pil_image = pil_image.convert('RGB')
+        
+        # Calculate optimal size while maintaining aspect ratio
+        original_width, original_height = pil_image.size
+        aspect_ratio = original_width / original_height
+        
+        # Calculate new dimensions
+        if aspect_ratio > max_width / max_height:
+            # Width is the limiting factor
+            new_width = max_width
+            new_height = max_width / aspect_ratio
+        else:
+            # Height is the limiting factor
+            new_height = max_height
+            new_width = max_height * aspect_ratio
+        
+        # Ensure minimum size
+        min_size = 20  # Minimum 20 points
+        new_width = max(new_width, min_size)
+        new_height = max(new_height, min_size)
+        
+        logger.info(f"Processing {image_type} for field {field_id}: Calculated size: {new_width}x{new_height}")
+        
+        # Resize image for better quality
+        resize_factor = 2  # Higher resolution for better quality
+        pixel_width = int(new_width * resize_factor)
+        pixel_height = int(new_height * resize_factor)
+        
+        resized_image = pil_image.resize((pixel_width, pixel_height), PILImage.Resampling.LANCZOS)
+        
+        # Save to buffer with high quality
+        final_buffer = BytesIO()
+        if image_type == "signature":
+            # Use PNG for signatures to preserve transparency
+            resized_image.save(final_buffer, format='PNG', optimize=True)
+        else:
+            # Use JPEG for photos with high quality
+            resized_image.save(final_buffer, format='JPEG', quality=90, optimize=True)
+        
+        # Create ReportLab Image using buffer directly
+        final_buffer.seek(0)
+        reportlab_image = Image(final_buffer, width=new_width, height=new_height)
+        
+        logger.info(f"Processing {image_type} for field {field_id}: Successfully created ReportLab Image")
+        return reportlab_image
+        
+    except Exception as e:
+        logger.error(f"Processing {image_type} for field {field_id}: Unexpected error: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None
+
 @router.get("/{inspection_id}/export-pdf")
 async def export_inspection_to_pdf(
     inspection_id: int,
@@ -944,13 +1089,12 @@ async def export_inspection_to_pdf(
     # Get inspector info
     inspector = db.query(User).filter(User.id == inspection.inspector_id).first()
     
-    # Create PDF
+    # Create PDF in memory buffer
     pdf_filename = f"inspection_{inspection_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    pdf_path = os.path.join("uploads", pdf_filename)
-    os.makedirs("uploads", exist_ok=True)
+    pdf_buffer = BytesIO()
     
-    # Create the PDF document
-    doc = SimpleDocTemplate(pdf_path, pagesize=A4, 
+    # Create the PDF document using memory buffer
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=A4, 
                            rightMargin=30, leftMargin=30,
                            topMargin=30, bottomMargin=30)
     
@@ -1028,7 +1172,7 @@ async def export_inspection_to_pdf(
     )
     
     # Enhanced title with company branding
-    title = Paragraph(f"<b>📋 INSPECTION REPORT</b>", title_style)
+    title = Paragraph(f"<b>INSPECTION REPORT</b>", title_style)
     elements.append(title)
     
     # Subtitle with form name
@@ -1044,34 +1188,68 @@ async def export_inspection_to_pdf(
     elements.append(Spacer(1, 16))
     
     # Enhanced Inspection Info Section
-    info_section = Paragraph("<b>📊 INSPECTION DETAILS</b>", section_style)
+    info_section = Paragraph("<b>INSPECTION DETAILS</b>", section_style)
     elements.append(info_section)
     elements.append(Spacer(1, 8))
     
-    # Status indicator with color coding
-    status_color = colors.HexColor('#059669') if inspection.status.value == 'approved' else \
-                   colors.HexColor('#dc2626') if inspection.status.value == 'rejected' else \
-                   colors.HexColor('#d97706')
+    # Status indicator with black text for better visibility
+    status_color = colors.black
     
-    status_indicator = f"🔍 {inspection.status.value.upper()}"
+    status_indicator = f"{inspection.status.value.upper()}"
+    
+    # Calculate flag summary for inspection details
+    flag_summary = {"flagged_count": 0, "total_responses": 0, "pass_count": 0, "hold_count": 0}
+    responses_map = {resp.field_id: resp for resp in inspection.responses}
+    
+    # Import flag evaluator
+    from utils.flag_evaluator import FlagEvaluator
+    
+    for field in form.fields:
+        field_response = responses_map.get(field.id)
+        if field_response:
+            flag_summary["total_responses"] += 1
+            
+            # Check if flagged
+            if field.flag_conditions:
+                is_flagged = FlagEvaluator.evaluate_field_response(
+                    field_type=field.field_type,
+                    response_value=field_response.response_value,
+                    measurement_value=field_response.measurement_value,
+                    flag_conditions=field.flag_conditions
+                )
+                if is_flagged:
+                    flag_summary["flagged_count"] += 1
+            
+            # Count pass/hold status
+            if field_response.pass_hold_status:
+                status_value = field_response.pass_hold_status.value if hasattr(field_response.pass_hold_status, 'value') else str(field_response.pass_hold_status)
+                if status_value.upper() == 'PASS':
+                    flag_summary["pass_count"] += 1
+                elif status_value.upper() == 'HOLD':
+                    flag_summary["hold_count"] += 1
+    
+    # Determine overall flag status
+    overall_flag = "FLAGGED" if flag_summary["flagged_count"] > 0 else "CLEAR"
+    flag_color = colors.HexColor('#dc2626') if flag_summary["flagged_count"] > 0 else colors.HexColor('#059669')
     
     info_data = [
-        ['🆔 Inspection ID:', str(inspection.id)],
-        ['📋 Form:', form.form_name],
-        ['👤 Inspector:', inspector.username if inspector else 'N/A'],
-        ['📊 Status:', status_indicator],
-        ['📅 Created:', inspection.created_at.strftime('%Y-%m-%d %H:%M:%S')],
-        ['🔄 Updated:', inspection.updated_at.strftime('%Y-%m-%d %H:%M:%S')]
+        ['Inspection ID:', str(inspection.id)],
+        ['Form:', form.form_name],
+        ['Inspector:', inspector.username if inspector else 'N/A'],
+        ['Flag Status:', overall_flag],
+        ['Status:', status_indicator],
+        ['Created:', inspection.created_at.strftime('%Y-%m-%d %H:%M:%S')],
+        ['Updated:', inspection.updated_at.strftime('%Y-%m-%d %H:%M:%S')]
     ]
     
     if inspection.reviewed_by:
         reviewer = db.query(User).filter(User.id == inspection.reviewed_by).first()
-        info_data.append(['✅ Reviewed By:', reviewer.username if reviewer else 'N/A'])
+        info_data.append(['Reviewed By:', reviewer.username if reviewer else 'N/A'])
         if inspection.reviewed_at:
-            info_data.append(['📅 Reviewed At:', inspection.reviewed_at.strftime('%Y-%m-%d %H:%M:%S')])
+            info_data.append(['Reviewed At:', inspection.reviewed_at.strftime('%Y-%m-%d %H:%M:%S')])
     
     if inspection.rejection_reason:
-        info_data.append(['❌ Rejection Reason:', inspection.rejection_reason])
+        info_data.append(['Rejection Reason:', inspection.rejection_reason])
     
     info_table = Table(info_data, colWidths=[2.2*inch, 3.8*inch])
     info_table.setStyle(TableStyle([
@@ -1087,10 +1265,15 @@ async def export_inspection_to_pdf(
         ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
         ('FONTSIZE', (1, 0), (1, -1), 10),
         
-        # Status row special styling
-        ('BACKGROUND', (1, 3), (1, 3), status_color),
+        # Flag status row special styling
+        ('BACKGROUND', (1, 3), (1, 3), flag_color),
         ('TEXTCOLOR', (1, 3), (1, 3), colors.white),
         ('FONTNAME', (1, 3), (1, 3), 'Helvetica-Bold'),
+        
+        # Status row special styling
+        ('BACKGROUND', (1, 4), (1, 4), colors.HexColor('#f8fafc')),
+        ('TEXTCOLOR', (1, 4), (1, 4), colors.black),
+        ('FONTNAME', (1, 4), (1, 4), 'Helvetica-Bold'),
         
         # General styling
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
@@ -1110,7 +1293,7 @@ async def export_inspection_to_pdf(
     elements.append(Spacer(1, 24))
     
     # Enhanced Responses Section
-    responses_title = Paragraph("<b>📝 INSPECTION RESPONSES</b>", section_style)
+    responses_title = Paragraph("<b>INSPECTION RESPONSES</b>", section_style)
     elements.append(responses_title)
     elements.append(Spacer(1, 12))
     
@@ -1130,16 +1313,16 @@ async def export_inspection_to_pdf(
     
     # Field type icons mapping
     field_icons = {
-        'text': '📝',
-        'dropdown': '📋',
-        'search_dropdown': '🔍',
-        'button': '🔘',
-        'photo': '📷',
-        'signature': '✍️',
-        'measurement': '📏',
-        'notes': '📄',
-        'datetime': '📅',
-        'time': '⏰'
+        'text': '',
+        'dropdown': '',
+        'search_dropdown': '',
+        'button': '',
+        'photo': '',
+        'signature': '',
+        'measurement': '',
+        'notes': '',
+        'datetime': '',
+        'time': ''
     }
     
     # Import flag evaluator
@@ -1148,8 +1331,8 @@ async def export_inspection_to_pdf(
     # Create responses table with enhanced formatting
     response_data = [
         [
-            Paragraph("<b>🔍 QUESTION</b>", ParagraphStyle('HeaderLeft', parent=normal_style, fontSize=11, textColor=colors.white, fontName='Helvetica-Bold')),
-            Paragraph("<b>💬 RESPONSE</b>", ParagraphStyle('HeaderRight', parent=normal_style, fontSize=11, textColor=colors.white, fontName='Helvetica-Bold'))
+            Paragraph("<b>QUESTION</b>", ParagraphStyle('HeaderLeft', parent=normal_style, fontSize=11, textColor=colors.white, fontName='Helvetica-Bold')),
+            Paragraph("<b>RESPONSE</b>", ParagraphStyle('HeaderRight', parent=normal_style, fontSize=11, textColor=colors.white, fontName='Helvetica-Bold'))
         ]
     ]
     
@@ -1158,15 +1341,12 @@ async def export_inspection_to_pdf(
     
     for field in sorted_fields:
         field_response = responses_map.get(field.id)
+        logger.info(f"Processing field {field.id}: {field.field_name} ({field.field_type})")
         
-        # Enhanced question formatting with icons
-        field_icon = field_icons.get(field.field_type, '📋')
-        question_text = f"{field_icon} {field.field_name}"
+        # Simplified question formatting
+        question_text = field.field_name
         if field.is_required:
             question_text += " <font color='red'>*</font>"
-        
-        # Field type badge
-        field_type_badge = f"<font size=8 color='#6b7280'>[{field.field_type.value.upper()}]</font>"
         
         # Enhanced answer formatting with status indicators
         answer_text = ""
@@ -1186,92 +1366,59 @@ async def export_inspection_to_pdf(
             if field_response.response_value:
                 # Handle different field types with appropriate formatting
                 if field.field_type == 'signature' and field_response.response_value.startswith('data:image'):
-                    # Process signature image
-                    try:
-                        # Extract base64 data from data URL
-                        base64_data = field_response.response_value.split(',')[1]
-                        image_data = base64.b64decode(base64_data)
-                        
-                        # Create PIL Image from bytes
-                        image_io = BytesIO(image_data)
-                        pil_image = PILImage.open(image_io)
-                        
-                        # Ensure image is in RGB mode
-                        if pil_image.mode != 'RGB':
-                            pil_image = pil_image.convert('RGB')
-                        
-                        # Save PIL image to BytesIO for ImageReader
-                        img_buffer = BytesIO()
-                        pil_image.save(img_buffer, format='PNG')
-                        img_buffer.seek(0)
-                        
-                        # Create ImageReader object
-                        image_reader = ImageReader(img_buffer)
-                        
-                        # Create ReportLab Image with size constraints
-                        signature_image = Image(image_reader, width=2*inch, height=1*inch)
-                        
-                        # Create a combined answer with text and image
-                        answer_paragraph = [
-                            Paragraph("✍️ <font color='#059669'>[Digital Signature]</font>", 
-                                    ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)),
+                    # Process signature image using robust function with very small dimensions
+                    signature_image = process_image_for_pdf(
+                        field_response.response_value, 
+                        max_width=1*inch, 
+                        max_height=0.5*inch, 
+                        field_id=field.id, 
+                        image_type="signature"
+                    )
+                    
+                    if signature_image:
+                        # Create a very compact signature display
+                        signature_content = KeepTogether([
+                            Paragraph("<font color='#059669' size='6'>[Digital Signature]</font>", 
+                                    ParagraphStyle('Answer', parent=normal_style, fontSize=6, spaceAfter=0, spaceBefore=0)),
                             signature_image
-                        ]
+                        ])
                         
                         # Add this row with special handling for image
                         question_paragraph = Paragraph(
-                            f"<b>{question_text}</b><br/>{field_type_badge}",
+                            f"<b>{question_text}</b>",
                             ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
                         )
                         
-                        response_data.append([question_paragraph, answer_paragraph])
+                        response_data.append([question_paragraph, signature_content])
                         
                         # Track flagged rows if needed
                         if is_flagged:
                             flagged_rows.append(len(response_data) - 1)
                         
                         continue  # Skip the normal processing for this field
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing signature image for field {field.id}: {e}")
-                        answer_text = "✍️ <font color='#dc2626'>[Error processing signature]</font>"
-                elif field.field_type == 'photo':
-                    # Process photo image
-                    try:
-                        if field_response.response_value.startswith('data:image'):
-                            # Extract base64 data from data URL
-                            base64_data = field_response.response_value.split(',')[1]
-                            image_data = base64.b64decode(base64_data)
-                            
-                            # Create PIL Image from bytes
-                            image_io = BytesIO(image_data)
-                            pil_image = PILImage.open(image_io)
-                            
-                            # Ensure image is in RGB mode
-                            if pil_image.mode != 'RGB':
-                                pil_image = pil_image.convert('RGB')
-                            
-                            # Save PIL image to BytesIO for ImageReader
-                            img_buffer = BytesIO()
-                            pil_image.save(img_buffer, format='PNG')
-                            img_buffer.seek(0)
-                            
-                            # Create ImageReader object
-                            image_reader = ImageReader(img_buffer)
-                            
-                            # Create ReportLab Image with size constraints
-                            photo_image = Image(image_reader, width=2*inch, height=1.5*inch)
-                            
-                            # Create a combined answer with text and image
+                    else:
+                        answer_text = "<font color='#dc2626'>[Error processing signature]</font>"
+                elif field.field_type == FieldType.photo:
+                    if field_response.response_value:
+                        # Use proper ReportLab units to prevent layout errors
+                        photo_image = process_image_for_pdf(
+                            field_response.response_value, 
+                            max_width=1.5*inch, 
+                            max_height=1*inch, 
+                            field_id=field.id, 
+                            image_type="photo"
+                        )
+                        if photo_image:
+                            # Create a combined answer with text and image (similar to signature handling)
                             answer_paragraph = [
-                                Paragraph("📷 <font color='#059669'>[Photo]</font>", 
+                                Paragraph("📷 <font color='#059669'>[Photo Evidence]</font>", 
                                         ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)),
                                 photo_image
                             ]
                             
                             # Add this row with special handling for image
                             question_paragraph = Paragraph(
-                                f"<b>{question_text}</b><br/>{field_type_badge}",
+                                f"<b>{question_text}</b>",
                                 ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
                             )
                             
@@ -1283,16 +1430,15 @@ async def export_inspection_to_pdf(
                             
                             continue  # Skip the normal processing for this field
                         else:
-                            answer_text = f"📷 <font color='#059669'>[Photo: {field_response.response_value}]</font>"
-                    except Exception as e:
-                        logger.error(f"Error processing photo image for field {field.id}: {e}")
-                        answer_text = f"📷 <font color='#dc2626'>[Error processing photo]</font>"
+                            answer_text = "<font color='#dc2626'>[Error processing photo]</font>"
+                    else:
+                        answer_text = "📷 <font color='#dc2626'>[No photo provided]</font>"
                 elif field.field_type == 'datetime':
-                    answer_text = f"📅 {field_response.response_value}"
+                    answer_text = f"{field_response.response_value}"
                 elif field.field_type == 'time':
-                    answer_text = f"⏰ {field_response.response_value}"
+                    answer_text = f"{field_response.response_value}"
                 elif field.field_type == 'dropdown' or field.field_type == 'search_dropdown':
-                    answer_text = f"📋 {field_response.response_value}"
+                    answer_text = f"{field_response.response_value}"
                 else:
                     answer_text = str(field_response.response_value)
             
@@ -1301,7 +1447,10 @@ async def export_inspection_to_pdf(
                 unit = ""
                 if field.field_options and 'unit' in field.field_options:
                     unit = f" {field.field_options['unit']}"
-                answer_text = f"📏 {field_response.measurement_value}{unit}"
+                answer_text = f"{field_response.measurement_value}{unit}"
+            
+            # Handle status indicators differently for KeepTogether vs text
+            status_indicators = []
             
             # Enhanced pass/hold status with color coding
             if field_response.pass_hold_status:
@@ -1311,27 +1460,47 @@ async def export_inspection_to_pdf(
                 else:
                     status_value = str(field_response.pass_hold_status).upper()
                 if status_value == 'PASS':
-                    status_indicator = f" <font color='#059669'><b>[✅ {status_value}]</b></font>"
+                    status_indicator = f"<font color='#059669'><b>[{status_value}]</b></font>"
                 else:  # HOLD
-                    status_indicator = f" <font color='#dc2626'><b>[❌ {status_value}]</b></font>"
-                answer_text += status_indicator if answer_text else status_indicator[1:]  # Remove leading space if no answer
+                    status_indicator = f"<font color='#dc2626'><b>[{status_value}]</b></font>"
+                status_indicators.append(status_indicator)
             
             # Add flag indicator if flagged
             if is_flagged:
-                answer_text += " <font color='#dc2626'><b>[🚩 FLAGGED]</b></font>"
+                status_indicators.append("<font color='#dc2626'><b>[FLAGGED]</b></font>")
+            
+            # Apply status indicators based on answer_text type
+            if hasattr(answer_text, '__class__') and 'Image' in str(answer_text.__class__):
+                # For Image objects (photos), create a simple list with image and status
+                if status_indicators:
+                    status_text = " ".join(status_indicators)
+                    status_paragraph = Paragraph(status_text, ParagraphStyle('Status', parent=normal_style, fontSize=10, spaceAfter=2))
+                    answer_text = [answer_text, status_paragraph]
+                # If no status indicators, keep just the image
+            else:
+                # For text answers, append status indicators directly
+                if status_indicators:
+                    status_text = " " + " ".join(status_indicators)
+                    answer_text += status_text if answer_text else status_text[1:]  # Remove leading space if no answer
         else:
             answer_text = "<font color='#9ca3af'>— No response provided —</font>"
         
         # Create formatted paragraphs
         question_paragraph = Paragraph(
-            f"<b>{question_text}</b><br/>{field_type_badge}",
+            f"<b>{question_text}</b>",
             ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
         )
         
-        answer_paragraph = Paragraph(
-            answer_text,
-            ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)
-        )
+        # Handle different answer types (text vs list/Image for images)
+        if isinstance(answer_text, (list, KeepTogether)) or (hasattr(answer_text, '__class__') and 'Image' in str(answer_text.__class__)):
+            # For images (photos/signatures), answer_text is already a flowable
+            answer_paragraph = answer_text
+        else:
+            # For text answers, create a Paragraph
+            answer_paragraph = Paragraph(
+                answer_text,
+                ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)
+            )
         
         response_data.append([question_paragraph, answer_paragraph])
         
@@ -1339,8 +1508,17 @@ async def export_inspection_to_pdf(
         if is_flagged:
             flagged_rows.append(len(response_data) - 1)
     
-    # Create the enhanced table
-    response_table = Table(response_data, colWidths=[3.2*inch, 3.3*inch])
+    # Create the enhanced table with better row height control
+    response_table = Table(response_data, colWidths=[3.2*inch, 3.3*inch], repeatRows=1)
+    
+    # Add row height constraints for signature rows to prevent layout errors
+    signature_row_styles = []
+    for i, row in enumerate(response_data):
+        if len(row) > 1 and hasattr(row[1], '__class__') and 'KeepTogether' in str(row[1].__class__):
+            # This is likely a signature row, limit its height
+            signature_row_styles.append(('ROWBACKGROUNDS', (0, i), (-1, i), [colors.white]))
+            signature_row_styles.append(('VALIGN', (0, i), (-1, i), 'TOP'))
+    
     response_table.setStyle(TableStyle([
         # Header row styling with gradient-like effect
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
@@ -1369,8 +1547,8 @@ async def export_inspection_to_pdf(
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('LEFTPADDING', (0, 0), (-1, -1), 12),
         ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-        ('TOPPADDING', (0, 1), (-1, -1), 10),
-        ('BOTTOMPADDING', (0, 1), (-1, -1), 10),
+        ('TOPPADDING', (0, 1), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
         
         # Alternating row colors for better readability
         *[('BACKGROUND', (1, i), (1, i), colors.HexColor('#ffffff') if i % 2 == 1 else colors.HexColor('#f9fafb'))
@@ -1388,89 +1566,26 @@ async def export_inspection_to_pdf(
         *[('TEXTCOLOR', (0, i), (-1, i), colors.HexColor('#991b1b'))  # Dark red text
           for i in flagged_rows],
         *[('FONTNAME', (0, i), (-1, i), 'Helvetica-Bold')  # Bold text for flagged rows
-          for i in flagged_rows]
+          for i in flagged_rows],
+        
+        # Apply signature row constraints
+        *signature_row_styles
     ]))
     
     elements.append(response_table)
     
-    # Enhanced footer section
-    elements.append(Spacer(1, 30))
-    
-    # Summary statistics
-    total_fields = len(sorted_fields)
-    answered_fields = len([f for f in sorted_fields if responses_map.get(f.id)])
-    completion_rate = (answered_fields / total_fields * 100) if total_fields > 0 else 0
-    
-    # Pass/Hold summary
-    def get_status_value(response):
-        if hasattr(response.pass_hold_status, 'value'):
-            return response.pass_hold_status.value
-        else:
-            return str(response.pass_hold_status)
-    
-    pass_count = len([r for r in inspection.responses if r.pass_hold_status and get_status_value(r) == 'pass'])
-    hold_count = len([r for r in inspection.responses if r.pass_hold_status and get_status_value(r) == 'hold'])
-    flagged_count = len(flagged_rows)
-    
-    # Summary section
-    summary_title = Paragraph("<b>📊 INSPECTION SUMMARY</b>", section_style)
-    elements.append(summary_title)
-    elements.append(Spacer(1, 8))
-    
-    summary_data = [
-        ['📋 Total Fields:', str(total_fields)],
-        ['✅ Completed Fields:', f"{answered_fields} ({completion_rate:.1f}%)"],
-        ['🟢 Pass Count:', str(pass_count)],
-        ['🔴 Hold Count:', str(hold_count)],
-        ['🚩 Flagged Abnormal:', str(flagged_count)],
-        ['📊 Overall Status:', inspection.status.value.upper()]
-    ]
-    
-    summary_table = Table(summary_data, colWidths=[2.5*inch, 2*inch])
-    summary_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#1e40af')),
-        ('TEXTCOLOR', (0, 0), (0, -1), colors.white),
-        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (0, -1), 10),
-        
-        ('BACKGROUND', (1, 0), (1, -1), colors.HexColor('#f8fafc')),
-        ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#374151')),
-        ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
-        ('FONTSIZE', (1, 0), (1, -1), 10),
-        
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#d1d5db')),
-        ('LEFTPADDING', (0, 0), (-1, -1), 10),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-    ]))
-    
-    elements.append(summary_table)
-    elements.append(Spacer(1, 20))
-    
-    # Enhanced footer with branding
-    footer_text = f"📄 Generated on {datetime.now().strftime('%Y-%m-%d at %H:%M:%S')} by InsPecPro™"
-    footer_subtext = "Professional Inspection Management System"
-    
-    footer = Paragraph(f"<i>{footer_text}</i><br/><font size=7 color='#9ca3af'>{footer_subtext}</font>", ParagraphStyle(
-        'Footer',
-        parent=styles['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#6b7280'),
-        alignment=TA_CENTER,
-        spaceAfter=0
-    ))
-    elements.append(footer)
-    
     # Build PDF
     doc.build(elements)
     
-    # Return the PDF file
-    return FileResponse(
-        pdf_path,
+    # Get PDF content from buffer
+    pdf_buffer.seek(0)
+    pdf_content = pdf_buffer.getvalue()
+    pdf_buffer.close()
+    
+    # Return the PDF file directly from memory
+    from fastapi.responses import Response
+    return Response(
+        content=pdf_content,
         media_type='application/pdf',
-        filename=pdf_filename,
         headers={"Content-Disposition": f"attachment; filename={pdf_filename}"}
     )

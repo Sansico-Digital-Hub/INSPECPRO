@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { inspectionsAPI, formsAPI } from '@/lib/api';
 import { Inspection, InspectionStatus, UserRole, Form } from '@/types';
-import { PlusIcon, EyeIcon, PencilIcon, TrashIcon, CheckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowDownTrayIcon, DocumentArrowDownIcon, CalendarIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, EyeIcon, PencilIcon, TrashIcon, CheckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowDownTrayIcon, DocumentArrowDownIcon, CalendarIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import Sidebar from '@/components/Sidebar';
 import { useSidebar } from '@/contexts/SidebarContext';
@@ -79,7 +79,9 @@ function InspectionsContent() {
         inspection.id.toString().includes(query) ||
         inspection.form_id.toString().includes(query) ||
         inspection.inspector_id.toString().includes(query) ||
-        inspection.status.toLowerCase().includes(query)
+        inspection.status.toLowerCase().includes(query) ||
+        (inspection.form_name && inspection.form_name.toLowerCase().includes(query)) ||
+        (inspection.inspector_username && inspection.inspector_username.toLowerCase().includes(query))
       );
       setFilteredInspections(filtered);
     }
@@ -211,7 +213,7 @@ function InspectionsContent() {
                 <input
                   type="text"
                   className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm text-black"
-                  placeholder="Search by ID, Form ID, Inspector ID, or Status..."
+                  placeholder="Search by ID, Form Name, Inspector Name, or Status..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -255,12 +257,18 @@ function InspectionsContent() {
                             <div className="text-sm font-medium text-black">
                               Inspection #{inspection.id}
                             </div>
+                            {inspection.has_flags && (
+                              <ExclamationTriangleIcon 
+                                className="h-5 w-5 text-amber-500 ml-2" 
+                                title="Warning: This inspection has flagged responses"
+                              />
+                            )}
                             <span className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(inspection.status)}`}>
                               {inspection.status}
                             </span>
                           </div>
                           <div className="text-sm text-black">
-                            Form ID: {inspection.form_id} | Inspector ID: {inspection.inspector_id}
+                            {inspection.form_name || `Form ID: ${inspection.form_id}`} | {inspection.inspector_username || `Inspector ID: ${inspection.inspector_id}`}
                           </div>
                           <div className="text-sm text-black">
                             Created: {new Date(inspection.created_at).toLocaleDateString()}

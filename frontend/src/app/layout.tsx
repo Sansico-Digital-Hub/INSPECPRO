@@ -6,7 +6,7 @@ import ClientWrapper from '@/components/ClientWrapper'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'InsPecPro - Inspection Management System',
+  title: 'Sanalyze - Sansico Analyze Inspection Management System',
   description: 'Professional inspection management system with 4 user roles',
 }
 

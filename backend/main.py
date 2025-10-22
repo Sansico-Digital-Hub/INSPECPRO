@@ -21,11 +21,20 @@ logger = get_logger()
 Base.metadata.create_all(bind=engine)
 logger.info("Database tables created/verified")
 
+# Initialize database constraints for subform validation
+try:
+    from database_constraints import create_database_constraint
+    create_database_constraint()
+    logger.info("Database constraints for subform validation initialized")
+except Exception as e:
+    logger.warning(f"Failed to initialize database constraints: {e}")
+    logger.warning("Subform validation constraints will not be enforced")
+
 # Rate limiter configuration
 limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
-    title="InsPecPro API",
+    title="Sanalyze API",
     description="Quality Assurance Inspection Management System",
     version="1.0.0"
 )
@@ -37,15 +46,15 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # CORS middleware - Environment-based configuration for security
 # Development origins
 dev_origins = [
-    "http://localhost:3000",
+    "http://localhost:3002",
     "http://localhost:3001", 
-    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3002",
     "http://127.0.0.1:3001"
 ]
 
 # Production origins - Replace with your actual domain
 prod_origins = [
-    "https://yourdomain.com",
+    "http://180.250.95.156:3002",
     "https://www.yourdomain.com",
     "https://inspecpro.yourdomain.com"
 ]
@@ -72,11 +81,11 @@ app.include_router(doc_number.router, prefix="/api/doc-numbers", tags=["Document
 
 @app.get("/")
 async def root():
-    return {"message": "InsPecPro API is running"}
+    return {"message": "Sanalyze API is running"}
 
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8004, reload=True)
