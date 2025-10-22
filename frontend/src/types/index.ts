@@ -111,6 +111,8 @@ export interface InspectionResponse {
   pass_hold_status?: PassHoldStatus;
   is_flagged?: boolean;  // Flag for abnormal data detection
   created_at?: string;
+  conditional_field_name?: string;  // For conditional fields
+  conditional_parent_field_id?: number;  // Parent field ID for conditional fields
 }
 
 export interface Inspection {
@@ -126,6 +128,8 @@ export interface Inspection {
   updated_at: string;
   responses: InspectionResponse[];
   has_flags?: boolean;  // Indicates if inspection has any flagged responses
+  form_name?: string;  // Form name for display
+  inspector_username?: string;  // Inspector username for display
 }
 
 export interface DashboardStats {

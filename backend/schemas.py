@@ -177,6 +177,8 @@ class InspectionResponse(InspectionBase):
     updated_at: datetime
     responses: List[InspectionResponseResponse] = []
     has_flags: Optional[bool] = None  # Computed field to indicate if inspection has any flagged responses
+    form_name: Optional[str] = None  # Form name for display
+    inspector_username: Optional[str] = None  # Inspector username for display
 
     class Config:
         from_attributes = True

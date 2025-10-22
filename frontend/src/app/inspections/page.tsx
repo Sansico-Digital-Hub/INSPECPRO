@@ -79,7 +79,9 @@ function InspectionsContent() {
         inspection.id.toString().includes(query) ||
         inspection.form_id.toString().includes(query) ||
         inspection.inspector_id.toString().includes(query) ||
-        inspection.status.toLowerCase().includes(query)
+        inspection.status.toLowerCase().includes(query) ||
+        (inspection.form_name && inspection.form_name.toLowerCase().includes(query)) ||
+        (inspection.inspector_username && inspection.inspector_username.toLowerCase().includes(query))
       );
       setFilteredInspections(filtered);
     }
@@ -211,7 +213,7 @@ function InspectionsContent() {
                 <input
                   type="text"
                   className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm text-black"
-                  placeholder="Search by ID, Form ID, Inspector ID, or Status..."
+                  placeholder="Search by ID, Form Name, Inspector Name, or Status..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -266,7 +268,7 @@ function InspectionsContent() {
                             </span>
                           </div>
                           <div className="text-sm text-black">
-                            Form ID: {inspection.form_id} | Inspector ID: {inspection.inspector_id}
+                            {inspection.form_name || `Form ID: ${inspection.form_id}`} | {inspection.inspector_username || `Inspector ID: ${inspection.inspector_id}`}
                           </div>
                           <div className="text-sm text-black">
                             Created: {new Date(inspection.created_at).toLocaleDateString()}

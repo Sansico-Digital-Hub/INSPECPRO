@@ -54,7 +54,7 @@ async def get_inspections(
     db: Session = Depends(get_db)
 ):
     """Get inspections based on user role"""
-    query = db.query(Inspection)
+    query = db.query(Inspection).join(Form, Inspection.form_id == Form.id).join(User, Inspection.inspector_id == User.id)
     
     # Filter based on user role
     if current_user.role.value == "user":
@@ -70,9 +70,14 @@ async def get_inspections(
     
     inspections = query.offset(skip).limit(limit).all()
     
-    # Add has_flags computed field
+    # Add computed fields
     for inspection in inspections:
         inspection.has_flags = any(response.is_flagged for response in inspection.responses)
+        # Get form name and inspector username
+        form = db.query(Form).filter(Form.id == inspection.form_id).first()
+        inspector = db.query(User).filter(User.id == inspection.inspector_id).first()
+        inspection.form_name = form.form_name if form else None
+        inspection.inspector_username = inspector.username if inspector else None
     
     return inspections
 
@@ -827,10 +832,25 @@ async def delete_inspection(
             detail="Not enough permissions"
         )
     
-    db.delete(inspection)
-    db.commit()
-    
-    return {"message": "Inspection deleted successfully"}
+    try:
+        # Delete related data first to avoid foreign key constraint errors
+        # Delete inspection responses
+        db.query(InspectionResponse).filter(InspectionResponse.inspection_id == inspection_id).delete()
+        
+        # Delete inspection files
+        db.query(InspectionFile).filter(InspectionFile.inspection_id == inspection_id).delete()
+        
+        # Now delete the inspection itself
+        db.delete(inspection)
+        db.commit()
+        
+        return {"message": "Inspection deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting inspection: {str(e)}"
+        )
 
 @router.post("/{inspection_id}/upload-file")
 async def upload_file(
@@ -927,6 +947,113 @@ async def upload_file(
         "safe_filename": file_metadata['safe_filename'],
         "file_hash": file_metadata['hash']
     }
+
+def process_image_for_pdf(base64_data: str, max_width: float, max_height: float, field_id: int, image_type: str = "image"):
+    """
+    Robust image processing function for PDF export
+    Returns ReportLab Image object or None if processing fails
+    """
+    try:
+        logger.info(f"Processing {image_type} for field {field_id}: Starting processing")
+        
+        # Validate input
+        if not base64_data or not isinstance(base64_data, str):
+            logger.error(f"Processing {image_type} for field {field_id}: Invalid base64 data")
+            return None
+        
+        # Clean base64 data
+        clean_data = base64_data.strip()
+        
+        # Remove data URL prefix if present
+        if clean_data.startswith('data:image'):
+            if ',' not in clean_data:
+                logger.error(f"Processing {image_type} for field {field_id}: Invalid data URL format")
+                return None
+            clean_data = clean_data.split(',')[1]
+        
+        # Add padding if necessary
+        missing_padding = len(clean_data) % 4
+        if missing_padding:
+            clean_data += '=' * (4 - missing_padding)
+        
+        # Decode base64
+        try:
+            image_data = base64.b64decode(clean_data)
+        except Exception as e:
+            logger.error(f"Processing {image_type} for field {field_id}: Base64 decode error: {e}")
+            return None
+        
+        # Validate decoded data
+        if len(image_data) < 100:  # Minimum reasonable image size
+            logger.error(f"Processing {image_type} for field {field_id}: Image data too small")
+            return None
+        
+        # Create PIL Image
+        image_buffer = BytesIO(image_data)
+        try:
+            pil_image = PILImage.open(image_buffer)
+            pil_image.verify()  # Verify image integrity
+            
+            # Reopen image after verify (verify closes the image)
+            image_buffer.seek(0)
+            pil_image = PILImage.open(image_buffer)
+        except Exception as e:
+            logger.error(f"Processing {image_type} for field {field_id}: PIL Image error: {e}")
+            return None
+        
+        # Convert to RGB if necessary
+        if pil_image.mode not in ['RGB', 'L']:
+            pil_image = pil_image.convert('RGB')
+        
+        # Calculate optimal size while maintaining aspect ratio
+        original_width, original_height = pil_image.size
+        aspect_ratio = original_width / original_height
+        
+        # Calculate new dimensions
+        if aspect_ratio > max_width / max_height:
+            # Width is the limiting factor
+            new_width = max_width
+            new_height = max_width / aspect_ratio
+        else:
+            # Height is the limiting factor
+            new_height = max_height
+            new_width = max_height * aspect_ratio
+        
+        # Ensure minimum size
+        min_size = 20  # Minimum 20 points
+        new_width = max(new_width, min_size)
+        new_height = max(new_height, min_size)
+        
+        logger.info(f"Processing {image_type} for field {field_id}: Calculated size: {new_width}x{new_height}")
+        
+        # Resize image for better quality
+        resize_factor = 2  # Higher resolution for better quality
+        pixel_width = int(new_width * resize_factor)
+        pixel_height = int(new_height * resize_factor)
+        
+        resized_image = pil_image.resize((pixel_width, pixel_height), PILImage.Resampling.LANCZOS)
+        
+        # Save to buffer with high quality
+        final_buffer = BytesIO()
+        if image_type == "signature":
+            # Use PNG for signatures to preserve transparency
+            resized_image.save(final_buffer, format='PNG', optimize=True)
+        else:
+            # Use JPEG for photos with high quality
+            resized_image.save(final_buffer, format='JPEG', quality=90, optimize=True)
+        
+        # Create ReportLab Image using buffer directly
+        final_buffer.seek(0)
+        reportlab_image = Image(final_buffer, width=new_width, height=new_height)
+        
+        logger.info(f"Processing {image_type} for field {field_id}: Successfully created ReportLab Image")
+        return reportlab_image
+        
+    except Exception as e:
+        logger.error(f"Processing {image_type} for field {field_id}: Unexpected error: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None
 
 @router.get("/{inspection_id}/export-pdf")
 async def export_inspection_to_pdf(
@@ -1239,37 +1366,22 @@ async def export_inspection_to_pdf(
             if field_response.response_value:
                 # Handle different field types with appropriate formatting
                 if field.field_type == 'signature' and field_response.response_value.startswith('data:image'):
-                    # Process signature image
-                    try:
-                        # Extract base64 data from data URL
-                        base64_data = field_response.response_value.split(',')[1]
-                        image_data = base64.b64decode(base64_data)
-                        
-                        # Create PIL Image from bytes
-                        image_io = BytesIO(image_data)
-                        pil_image = PILImage.open(image_io)
-                        
-                        # Ensure image is in RGB mode
-                        if pil_image.mode != 'RGB':
-                            pil_image = pil_image.convert('RGB')
-                        
-                        # Save PIL image to BytesIO for ImageReader
-                        img_buffer = BytesIO()
-                        pil_image.save(img_buffer, format='PNG')
-                        img_buffer.seek(0)
-                        
-                        # Create ImageReader object
-                        image_reader = ImageReader(img_buffer)
-                        
-                        # Create ReportLab Image with size constraints
-                        signature_image = Image(image_reader, width=2*inch, height=1*inch)
-                        
-                        # Create a combined answer with text and image
-                        answer_paragraph = [
-                            Paragraph("<font color='#059669'>[Digital Signature]</font>", 
-                                    ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)),
+                    # Process signature image using robust function with very small dimensions
+                    signature_image = process_image_for_pdf(
+                        field_response.response_value, 
+                        max_width=1*inch, 
+                        max_height=0.5*inch, 
+                        field_id=field.id, 
+                        image_type="signature"
+                    )
+                    
+                    if signature_image:
+                        # Create a very compact signature display
+                        signature_content = KeepTogether([
+                            Paragraph("<font color='#059669' size='6'>[Digital Signature]</font>", 
+                                    ParagraphStyle('Answer', parent=normal_style, fontSize=6, spaceAfter=0, spaceBefore=0)),
                             signature_image
-                        ]
+                        ])
                         
                         # Add this row with special handling for image
                         question_paragraph = Paragraph(
@@ -1277,95 +1389,50 @@ async def export_inspection_to_pdf(
                             ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
                         )
                         
-                        response_data.append([question_paragraph, answer_paragraph])
+                        response_data.append([question_paragraph, signature_content])
                         
                         # Track flagged rows if needed
                         if is_flagged:
                             flagged_rows.append(len(response_data) - 1)
                         
                         continue  # Skip the normal processing for this field
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing signature image for field {field.id}: {e}")
+                    else:
                         answer_text = "<font color='#dc2626'>[Error processing signature]</font>"
                 elif field.field_type == FieldType.photo:
-                    try:
-                        if field_response.response_value:
-                            logger.info(f"Processing photo for field {field.id}: Starting photo processing")
+                    if field_response.response_value:
+                        # Use proper ReportLab units to prevent layout errors
+                        photo_image = process_image_for_pdf(
+                            field_response.response_value, 
+                            max_width=1.5*inch, 
+                            max_height=1*inch, 
+                            field_id=field.id, 
+                            image_type="photo"
+                        )
+                        if photo_image:
+                            # Create a combined answer with text and image (similar to signature handling)
+                            answer_paragraph = [
+                                Paragraph("📷 <font color='#059669'>[Photo Evidence]</font>", 
+                                        ParagraphStyle('Answer', parent=normal_style, fontSize=10, spaceAfter=2)),
+                                photo_image
+                            ]
                             
-                            # Clean and decode base64 image
-                            base64_data = field_response.response_value
-                            logger.info(f"Processing photo for field {field.id}: Got base64 data, length: {len(base64_data)}")
+                            # Add this row with special handling for image
+                            question_paragraph = Paragraph(
+                                f"<b>{question_text}</b>",
+                                ParagraphStyle('Question', parent=normal_style, fontSize=10, spaceAfter=2)
+                            )
                             
-                            # Remove data URL prefix if present
-                            if base64_data.startswith('data:image'):
-                                base64_data = base64_data.split(',')[1]
-                                logger.info(f"Processing photo for field {field.id}: Removed data URL prefix")
+                            response_data.append([question_paragraph, answer_paragraph])
                             
-                            # Add padding if necessary
-                            missing_padding = len(base64_data) % 4
-                            if missing_padding:
-                                base64_data += '=' * (4 - missing_padding)
-                                logger.info(f"Processing photo for field {field.id}: Added padding")
+                            # Track flagged rows if needed
+                            if is_flagged:
+                                flagged_rows.append(len(response_data) - 1)
                             
-                            image_data = base64.b64decode(base64_data)
-                            logger.info(f"Processing photo for field {field.id}: Decoded base64, image size: {len(image_data)} bytes")
-                            
-                            image_buffer = BytesIO(image_data)
-                            logger.info(f"Processing photo for field {field.id}: Created BytesIO buffer")
-                            
-                            # Open and resize image to fit in PDF
-                            pil_image = PILImage.open(image_buffer)
-                            logger.info(f"Processing photo for field {field.id}: Opened PIL image, size: {pil_image.size}")
-                            
-                            # Calculate size to fit within constraints (max 200x150 points)
-                            max_width = 200
-                            max_height = 150
-                            
-                            # Calculate aspect ratio
-                            aspect_ratio = pil_image.width / pil_image.height
-                            
-                            if aspect_ratio > max_width / max_height:
-                                # Width is the limiting factor
-                                new_width = max_width
-                                new_height = max_width / aspect_ratio
-                            else:
-                                # Height is the limiting factor
-                                new_height = max_height
-                                new_width = max_height * aspect_ratio
-                            
-                            logger.info(f"Processing photo for field {field.id}: Calculated new size: {new_width}x{new_height}")
-                            
-                            # Resize image
-                            resized_image = pil_image.resize((int(new_width * 2), int(new_height * 2)), PILImage.Resampling.LANCZOS)
-                            logger.info(f"Processing photo for field {field.id}: Resized image")
-                            
-                            # Convert back to bytes
-                            resized_buffer = BytesIO()
-                            resized_image.save(resized_buffer, format='JPEG', quality=85)
-                            resized_buffer.seek(0)
-                            logger.info(f"Processing photo for field {field.id}: Saved resized image to buffer")
-                            
-                            # Create ReportLab Image directly from buffer without ImageReader
-                            # Reset buffer position
-                            resized_buffer.seek(0)
-                            logger.info(f"Processing photo for field {field.id}: Using buffer directly for Image")
-                            
-                            # Create Image directly from BytesIO buffer
-                            photo_image = Image(resized_buffer, width=new_width, height=new_height)
-                            logger.info(f"Processing photo for field {field.id}: Created ReportLab Image")
-                            
-                            # Wrap image in KeepTogether to ensure proper table handling
-                            answer_text = KeepTogether([photo_image])
-                            logger.info(f"Processing photo for field {field.id}: Wrapped image in KeepTogether")
+                            continue  # Skip the normal processing for this field
                         else:
-                            answer_text = "📷 <font color='#dc2626'>[No photo provided]</font>"
-                    except Exception as e:
-                        logger.error(f"Error processing photo for field {field.id}: {e}")
-                        logger.error(f"Error type: {type(e).__name__}")
-                        import traceback
-                        logger.error(f"Traceback: {traceback.format_exc()}")
-                        answer_text = "<font color='#dc2626'>[Error processing photo]</font>"
+                            answer_text = "<font color='#dc2626'>[Error processing photo]</font>"
+                    else:
+                        answer_text = "📷 <font color='#dc2626'>[No photo provided]</font>"
                 elif field.field_type == 'datetime':
                     answer_text = f"{field_response.response_value}"
                 elif field.field_type == 'time':
@@ -1441,8 +1508,17 @@ async def export_inspection_to_pdf(
         if is_flagged:
             flagged_rows.append(len(response_data) - 1)
     
-    # Create the enhanced table
-    response_table = Table(response_data, colWidths=[3.2*inch, 3.3*inch])
+    # Create the enhanced table with better row height control
+    response_table = Table(response_data, colWidths=[3.2*inch, 3.3*inch], repeatRows=1)
+    
+    # Add row height constraints for signature rows to prevent layout errors
+    signature_row_styles = []
+    for i, row in enumerate(response_data):
+        if len(row) > 1 and hasattr(row[1], '__class__') and 'KeepTogether' in str(row[1].__class__):
+            # This is likely a signature row, limit its height
+            signature_row_styles.append(('ROWBACKGROUNDS', (0, i), (-1, i), [colors.white]))
+            signature_row_styles.append(('VALIGN', (0, i), (-1, i), 'TOP'))
+    
     response_table.setStyle(TableStyle([
         # Header row styling with gradient-like effect
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
@@ -1471,8 +1547,8 @@ async def export_inspection_to_pdf(
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('LEFTPADDING', (0, 0), (-1, -1), 12),
         ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-        ('TOPPADDING', (0, 1), (-1, -1), 10),
-        ('BOTTOMPADDING', (0, 1), (-1, -1), 10),
+        ('TOPPADDING', (0, 1), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
         
         # Alternating row colors for better readability
         *[('BACKGROUND', (1, i), (1, i), colors.HexColor('#ffffff') if i % 2 == 1 else colors.HexColor('#f9fafb'))
@@ -1490,7 +1566,10 @@ async def export_inspection_to_pdf(
         *[('TEXTCOLOR', (0, i), (-1, i), colors.HexColor('#991b1b'))  # Dark red text
           for i in flagged_rows],
         *[('FONTNAME', (0, i), (-1, i), 'Helvetica-Bold')  # Bold text for flagged rows
-          for i in flagged_rows]
+          for i in flagged_rows],
+        
+        # Apply signature row constraints
+        *signature_row_styles
     ]))
     
     elements.append(response_table)

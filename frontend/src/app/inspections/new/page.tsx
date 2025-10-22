@@ -96,6 +96,25 @@ export default function NewInspectionPage() {
         pass_hold_status: undefined
       };
     });
+
+    // Initialize subform instances if this is a subform field
+    if (field.field_type === 'subform' && field.id) {
+      const subformInstancesKey = `${field.id}_subform_instances`;
+      const minInstances = field.field_options?.min_instances || 0;
+      
+      // Create minimum required instances with empty data
+      const initialInstances = Array.from({ length: Math.max(1, minInstances) }, (_, i) => ({
+        id: `instance_${Date.now()}_${i}`,
+        data: {}
+      }));
+      
+      initialResponses[subformInstancesKey] = {
+        field_id: field.id,
+        response_value: JSON.stringify(initialInstances),
+        measurement_value: undefined,
+        pass_hold_status: undefined
+      };
+    }
     
     // Recursively initialize conditional fields
     if (field.has_conditional && field.conditional_rules) {
@@ -171,14 +190,79 @@ export default function NewInspectionPage() {
     setIsDraft(asDraft);
 
     try {
+      // First, collect subform field data into instance data structures
+      console.log('🔄 Processing subform data...');
+      
+      // Create a copy of responses to modify
+      const updatedResponses = { ...responses };
+      
+      // Process each subform field to collect individual field data into instances
+      selectedForm.fields?.forEach((field: any) => {
+        if (field.field_type === 'subform') {
+          const subformInstancesKey = `${field.id}_subform_instances`;
+          const instancesResponse = updatedResponses[subformInstancesKey];
+          
+          if (instancesResponse?.response_value) {
+            try {
+              const instances = JSON.parse(instancesResponse.response_value);
+              console.log(`📋 Processing subform field ${field.field_name} with ${instances.length} instances`);
+              
+              // Collect data for each instance
+              instances.forEach((instance: any, instanceIndex: number) => {
+                const instanceData: any = {};
+                
+                // Collect all subfield values for this instance
+                field.field_options?.subform_fields?.forEach((subField: any) => {
+                  const subFieldKey = `${field.id}_instance_${instanceIndex}_${subField.field_name}`;
+                  const subFieldResponse = updatedResponses[subFieldKey];
+                  
+                  if (subFieldResponse) {
+                    // Store the field value in the instance data
+                    if (subFieldResponse.response_value !== undefined && subFieldResponse.response_value !== '') {
+                      instanceData[subField.field_name] = subFieldResponse.response_value;
+                    } else if (subFieldResponse.measurement_value !== undefined) {
+                      instanceData[subField.field_name] = subFieldResponse.measurement_value;
+                    } else if (subFieldResponse.pass_hold_status !== undefined) {
+                      instanceData[subField.field_name] = subFieldResponse.pass_hold_status;
+                    }
+                    
+                    console.log(`  📝 Collected ${subField.field_name}: ${instanceData[subField.field_name]}`);
+                  }
+                });
+                
+                // Update the instance data
+                instance.data = instanceData;
+                console.log(`  ✅ Instance ${instanceIndex + 1} data:`, instanceData);
+              });
+              
+              // Update the response with the collected data
+              updatedResponses[subformInstancesKey] = {
+                ...instancesResponse,
+                response_value: JSON.stringify(instances)
+              };
+              
+              console.log(`✅ Updated subform ${field.field_name} with collected data:`, instances);
+            } catch (error) {
+              console.error(`❌ Error processing subform ${field.field_name}:`, error);
+            }
+          }
+        }
+      });
+
       // Prepare responses: only include responses with field_id (skip conditional fields without ID)
       // Backend will need to handle conditional fields separately or we store them differently
-      const validResponses = Object.entries(responses)
+      const validResponses = Object.entries(updatedResponses)
         .filter(([key, response]) => {
-          // Include if has value and has field_id
-          const hasValue = response.response_value || response.measurement_value !== undefined || response.pass_hold_status;
+          // Include if has field_id
           const hasFieldId = response.field_id !== null;
-          return hasValue && hasFieldId;
+          
+          // For subform instances, always include them even if empty (they contain JSON data)
+          const isSubformInstance = key.includes('_subform_instances');
+          
+          // Include if has value and has field_id, OR if it's a subform instance with field_id
+          const hasValue = response.response_value || response.measurement_value !== undefined || response.pass_hold_status;
+          
+          return hasFieldId && (hasValue || isSubformInstance);
         })
         .map(([key, response]) => response);
 
@@ -186,7 +270,7 @@ export default function NewInspectionPage() {
       
       // For conditional fields without field_id, we'll store them as JSON in a special field
       // or handle them differently based on backend requirements
-      const conditionalResponses = Object.entries(responses)
+      const conditionalResponses = Object.entries(updatedResponses)
         .filter(([key, response]) => {
           const hasValue = response.response_value || response.measurement_value !== undefined || response.pass_hold_status;
           const noFieldId = response.field_id === null;
