@@ -361,6 +361,7 @@ export default function NewInspectionPage() {
                         updateResponse={updateResponse}
                         photoFiles={photoFiles}
                         setPhotoFiles={setPhotoFiles}
+                        setResponses={setResponses}
                       />
                     ))}
                 </div>
@@ -402,7 +403,8 @@ function MultiTypeFieldRenderer({
   updateResponse,
   parentPath = '',  // Track parent path for unique keys
   photoFiles,
-  setPhotoFiles
+  setPhotoFiles,
+  setResponses
 }: {
   field: FormField;
   responses: Record<string, InspectionResponse>;
@@ -410,6 +412,7 @@ function MultiTypeFieldRenderer({
   parentPath?: string;
   photoFiles: { [fieldId: string]: File };
   setPhotoFiles: React.Dispatch<React.SetStateAction<{ [fieldId: string]: File }>>;
+  setResponses: React.Dispatch<React.SetStateAction<Record<string, InspectionResponse>>>;
 }) {
   // Generate unique key for this field (same logic as initializeFieldResponses)
   const fieldKey = field.id 
@@ -459,8 +462,8 @@ function MultiTypeFieldRenderer({
             ...field,
             field_type: fieldType
           };
-          
-          return (
+
+                    return (
             <div key={`${fieldKey}-${fieldType}-${index}`}>
               {fieldTypes.length > 1 && (
                 <div className="text-xs font-semibold text-gray-800 mb-1 bg-blue-50 px-3 py-2 rounded border border-blue-200">
@@ -473,6 +476,8 @@ function MultiTypeFieldRenderer({
                 onUpdate={(updates) => updateResponse(responseKey, updates)}
                 photoFiles={photoFiles}
                 setPhotoFiles={setPhotoFiles}
+                responses={responses}
+                setResponses={setResponses}
               />
             </div>
           );
@@ -499,6 +504,7 @@ function MultiTypeFieldRenderer({
                 parentPath={newParentPath}
                 photoFiles={photoFiles}
                 setPhotoFiles={setPhotoFiles}
+                setResponses={setResponses}
               />
             );
           })}
@@ -513,13 +519,17 @@ function FieldRenderer({
   response,
   onUpdate,
   photoFiles,
-  setPhotoFiles
+  setPhotoFiles,
+  responses,
+  setResponses
 }: {
   field: FormField;
   response: InspectionResponse;
   onUpdate: (updates: Partial<InspectionResponse>) => void;
   photoFiles: { [fieldId: string]: File };
   setPhotoFiles: React.Dispatch<React.SetStateAction<{ [fieldId: string]: File }>>;
+  responses: Record<string, InspectionResponse>;
+  setResponses: React.Dispatch<React.SetStateAction<Record<string, InspectionResponse>>>;
 }) {
   const [signatureRef, setSignatureRef] = useState<SignatureCanvas | null>(null);
 
@@ -528,8 +538,22 @@ function FieldRenderer({
   const activeFieldType = hasMultipleTypes ? field.field_type : field.field_type;
 
   const renderSingleFieldType = (fieldType: FieldType) => {
-    switch (fieldType) {
-      case FieldType.TEXT:
+    // Normalize fieldType to handle any string/enum mismatches
+    const normalizedFieldType = String(fieldType).toLowerCase();
+    
+    // Debug logging for FieldRenderer
+    if (normalizedFieldType === 'dropdown') {
+      console.log(`🎯 FieldRenderer dropdown debug:`, {
+        field_name: field.field_name,
+        field_type: fieldType,
+        normalized_type: normalizedFieldType,
+        field_options: field.field_options,
+        options_array: field.field_options?.options
+      });
+    }
+    
+    switch (normalizedFieldType) {
+      case 'text':
         return (
           <input
             type="text"
@@ -541,7 +565,7 @@ function FieldRenderer({
           />
         );
 
-      case FieldType.NOTES:
+      case 'notes':
         return (
           <div className="mt-1">
             <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
@@ -570,7 +594,7 @@ function FieldRenderer({
           </div>
         );
 
-      case FieldType.DROPDOWN:
+      case 'dropdown':
         return (
           <select
             className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-gray-900"
@@ -587,7 +611,7 @@ function FieldRenderer({
           </select>
         );
 
-      case FieldType.SEARCH_DROPDOWN:
+      case 'search_dropdown':
         return (
           <SearchableDropdown
             options={field.field_options?.options || []}
@@ -598,7 +622,7 @@ function FieldRenderer({
           />
         );
 
-      case FieldType.BUTTON:
+      case 'button':
         return (
           <div className="flex space-x-2">
             <button
@@ -626,7 +650,7 @@ function FieldRenderer({
           </div>
         );
 
-      case FieldType.MEASUREMENT:
+      case 'measurement':
         const handleMeasurementChange = (value: number | undefined) => {
           if (value === undefined) {
             onUpdate({ measurement_value: undefined, pass_hold_status: undefined });
@@ -718,7 +742,7 @@ function FieldRenderer({
           </div>
         );
 
-      case FieldType.PHOTO:
+      case 'photo':
         const fieldKey = field.id?.toString() || 'temp';
         const currentPhotoFile = photoFiles[fieldKey];
         return (
@@ -753,7 +777,7 @@ function FieldRenderer({
           </div>
         );
 
-      case FieldType.SIGNATURE:
+      case 'signature':
         return (
           <div className="space-y-4">
             <div className="border border-gray-300 rounded-md">
@@ -789,7 +813,7 @@ function FieldRenderer({
           </div>
         );
 
-      case FieldType.DATE:
+      case 'date':
         return (
           <input
             type="date"
@@ -800,7 +824,7 @@ function FieldRenderer({
           />
         );
 
-      case FieldType.DATETIME:
+      case 'datetime':
         const autoFillDateTime = field.field_options?.auto && !response.response_value;
         if (autoFillDateTime) {
           const now = new Date();
@@ -818,7 +842,7 @@ function FieldRenderer({
           />
         );
 
-      case FieldType.TIME:
+      case 'time':
         return (
           <input
             type="time"
@@ -827,6 +851,174 @@ function FieldRenderer({
             onChange={(e) => onUpdate({ response_value: e.target.value })}
             required={field.is_required}
           />
+        );
+
+      case 'subform':
+        // Get subform instances from responses or initialize with minimum instances
+        const subformInstancesKey = `${field.id}_subform_instances`;
+        const existingInstances = responses[subformInstancesKey]?.response_value ? 
+          JSON.parse(responses[subformInstancesKey].response_value) : [];
+        
+        const minInstances = field.field_options?.min_instances || 0;
+        const maxInstances = field.field_options?.max_instances || 0; // 0 means unlimited
+        
+        // Initialize with minimum instances if none exist
+        const currentInstances = existingInstances.length >= minInstances ? 
+          existingInstances : 
+          Array.from({ length: minInstances }, (_, i) => ({ id: `instance_${i}`, data: {} }));
+
+        const updateSubformInstances = (newInstances: any[]) => {
+          setResponses(prev => ({
+            ...prev,
+            [subformInstancesKey]: {
+              field_id: field.id || null,
+              response_value: JSON.stringify(newInstances),
+              pass_hold_status: undefined,
+              measurement_value: undefined
+            }
+          }));
+        };
+
+        const addInstance = () => {
+          if (maxInstances === 0 || currentInstances.length < maxInstances) {
+            const newInstance = { 
+              id: `instance_${Date.now()}`, 
+              data: {} 
+            };
+            const newInstances = [...currentInstances, newInstance];
+            updateSubformInstances(newInstances);
+          }
+        };
+
+        const removeInstance = (instanceIndex: number) => {
+          if (currentInstances.length > minInstances) {
+            const newInstances = currentInstances.filter((_: any, index: number) => index !== instanceIndex);
+            updateSubformInstances(newInstances);
+            
+            // Clean up responses for removed instance
+            field.field_options?.subform_fields?.forEach((subField: any) => {
+              const subFieldKey = `${field.id}_instance_${instanceIndex}_${subField.field_name}`;
+              setResponses(prev => {
+                const newResponses = { ...prev };
+                delete newResponses[subFieldKey];
+                return newResponses;
+              });
+            });
+          }
+        };
+
+        return (
+          <div className="space-y-4">
+            <div className="bg-gray-50 border border-gray-200 rounded-md p-4">
+              <div className="flex justify-between items-center mb-3">
+                <h4 className="text-sm font-medium text-gray-900">
+                  {field.field_name} ({currentInstances.length} instance{currentInstances.length !== 1 ? 's' : ''})
+                </h4>
+                <div className="flex space-x-2">
+                  {(maxInstances === 0 || currentInstances.length < maxInstances) && (
+                    <button
+                      type="button"
+                      onClick={addInstance}
+                      className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                    >
+                      + Add Instance
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              {currentInstances.map((instance: any, instanceIndex: number) => (
+                <div key={instance.id} className="mb-4 p-4 bg-white border border-gray-200 rounded-lg">
+                  <div className="flex justify-between items-center mb-3">
+                    <h5 className="text-sm font-medium text-gray-800">
+                      Instance {instanceIndex + 1}
+                    </h5>
+                    {currentInstances.length > minInstances && (
+                      <button
+                        type="button"
+                        onClick={() => removeInstance(instanceIndex)}
+                        className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  
+                  {field.field_options?.subform_fields?.map((subField: any, subIndex: number) => {
+                    // Generate unique key for this subfield response in this instance
+                    const subFieldKey = `${field.id}_instance_${instanceIndex}_${subField.field_name}`;
+                    const subFieldResponse = responses[subFieldKey] || {
+                      field_id: null,
+                      conditional_field_name: subField.field_name,
+                      conditional_parent_field_id: field.id,
+                      response_value: '',
+                      pass_hold_status: undefined,
+                      measurement_value: undefined
+                    };
+
+
+
+                    // Ensure proper field type conversion
+                    const normalizedFieldType = String(subField.field_type).toLowerCase();
+                    const fieldTypeEnum = normalizedFieldType as FieldType;
+
+                    // Debug logging for subform fields
+                    console.log(`🔍 SUBFORM DEBUG - Field: ${subField.field_name}`, {
+                      original_field_type: subField.field_type,
+                      normalized_field_type: normalizedFieldType,
+                      field_type_enum: fieldTypeEnum,
+                      field_options: subField.field_options,
+                      has_options: !!(subField.field_options?.options),
+                      options_array: subField.field_options?.options,
+                      options_length: subField.field_options?.options?.length || 0,
+                      is_dropdown: normalizedFieldType === 'dropdown',
+                      final_field_passed_to_renderer: {
+                        ...subField,
+                        id: null,
+                        field_type: fieldTypeEnum,
+                        field_options: subField.field_options || {}
+                      }
+                    });
+
+                    return (
+                      <div key={subIndex} className="mb-3">
+                        <label className="block text-sm font-medium text-gray-900 mb-1">
+                          {subField.field_name}
+                          {subField.is_required && <span className="text-red-500 ml-1">*</span>}
+                        </label>
+                        <FieldRenderer
+                          field={{
+                            ...subField,
+                            id: null, // Subfields don't have IDs
+                            field_type: fieldTypeEnum,
+                            field_options: subField.field_options || {}
+                          }}
+                          response={subFieldResponse}
+                          onUpdate={(updates) => {
+                            setResponses(prev => ({
+                              ...prev,
+                              [subFieldKey]: { ...subFieldResponse, ...updates }
+                            }));
+                          }}
+                          photoFiles={photoFiles}
+                          setPhotoFiles={setPhotoFiles}
+                          responses={responses}
+                          setResponses={setResponses}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+              
+              {minInstances > 0 && (
+                <p className="text-xs text-gray-500 mt-2">
+                  Minimum {minInstances} instance{minInstances !== 1 ? 's' : ''} required
+                  {maxInstances > 0 && `, maximum ${maxInstances} allowed`}
+                </p>
+              )}
+            </div>
+          </div>
         );
 
       default:

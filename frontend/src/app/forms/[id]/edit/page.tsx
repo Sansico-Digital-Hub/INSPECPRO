@@ -810,6 +810,31 @@ function EditFormContent() {
       }
     }
     
+    // Process subform fields: convert field_types array to field_type string
+    if (preparedField.field_type === 'SUBFORM' && newFieldOptions.subform_fields) {
+      newFieldOptions.subform_fields = newFieldOptions.subform_fields.map((subField: any) => {
+        const processedSubField = { ...subField };
+        
+        // Convert field_types array to single field_type
+        if (processedSubField.field_types && Array.isArray(processedSubField.field_types)) {
+          // Use the first field_type from the array, or default to 'text' if empty
+          processedSubField.field_type = processedSubField.field_types.length > 0 
+            ? processedSubField.field_types[0] 
+            : 'text';
+          
+          // Remove field_types array as backend expects field_type string
+          delete processedSubField.field_types;
+        }
+        
+        // Ensure field_type is not empty
+        if (!processedSubField.field_type || processedSubField.field_type.trim() === '') {
+          processedSubField.field_type = 'text';
+        }
+        
+        return processedSubField;
+      });
+    }
+    
     // Replace field_options completely (not merge)
     preparedField.field_options = newFieldOptions;
     
@@ -1858,7 +1883,7 @@ function EditFormContent() {
                                           const conditions = subField.conditional_logic || [];
                                           subFields[subIndex] = { 
                                             ...subFields[subIndex], 
-                                            conditional_logic: [...conditions, { field_index: '', dropdown_value: '', field_types: [], field_type: '' }]
+                                            conditional_logic: [...conditions, { field_index: '', dropdown_value: '', field_types: ['text'], field_type: 'text' }]
                                           };
                                           updateField(index, { field_options: { ...field.field_options, subform_fields: subFields } });
                                         }}
@@ -1985,7 +2010,7 @@ function EditFormContent() {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const subFields = [...(field.field_options?.subform_fields || []), { field_name: '', field_type: '' }];
+                                  const subFields = [...(field.field_options?.subform_fields || []), { field_name: '', field_type: 'text', field_types: ['text'] }];
                                   updateField(index, { 
                                     field_options: { ...field.field_options, subform_fields: subFields } 
                                   });

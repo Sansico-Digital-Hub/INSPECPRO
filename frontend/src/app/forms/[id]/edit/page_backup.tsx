@@ -1681,7 +1681,7 @@ function NewFormContent() {
                                           const conditions = subField.conditional_logic || [];
                                           subFields[subIndex] = { 
                                             ...subFields[subIndex], 
-                                            conditional_logic: [...conditions, { field_index: '', dropdown_value: '', field_types: [], field_type: '' }]
+                                            conditional_logic: [...conditions, { field_index: '', dropdown_value: '', field_types: ['text'], field_type: 'text' }]
                                           };
                                           updateField(index, { field_options: { ...field.field_options, subform_fields: subFields } });
                                         }}
@@ -1808,7 +1808,7 @@ function NewFormContent() {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const subFields = [...(field.field_options?.subform_fields || []), { field_name: '', field_type: '' }];
+                                  const subFields = [...(field.field_options?.subform_fields || []), { field_name: '', field_type: 'text', field_types: ['text'] }];
                                   updateField(index, { 
                                     field_options: { ...field.field_options, subform_fields: subFields } 
                                   });

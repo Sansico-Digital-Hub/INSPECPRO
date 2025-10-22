@@ -21,6 +21,15 @@ logger = get_logger()
 Base.metadata.create_all(bind=engine)
 logger.info("Database tables created/verified")
 
+# Initialize database constraints for subform validation
+try:
+    from database_constraints import create_database_constraint
+    create_database_constraint()
+    logger.info("Database constraints for subform validation initialized")
+except Exception as e:
+    logger.warning(f"Failed to initialize database constraints: {e}")
+    logger.warning("Subform validation constraints will not be enforced")
+
 # Rate limiter configuration
 limiter = Limiter(key_func=get_remote_address)
 
@@ -79,4 +88,4 @@ async def health_check():
     return {"status": "healthy"}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8004, reload=True)

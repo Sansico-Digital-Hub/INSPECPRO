@@ -244,6 +244,7 @@ export default function EditInspectionPage() {
                       field={field}
                       responses={responses}
                       updateResponse={updateResponse}
+                      setResponses={setResponses}
                     />
                   ))}
               </div>
@@ -277,13 +278,15 @@ function MultiTypeFieldRenderer({
   responses,
   updateResponse,
   depth = 0,
-  parentPath = ''  // Track parent path for unique keys
+  parentPath = '',  // Track parent path for unique keys
+  setResponses
 }: {
   field: FormField;
   responses: Record<string, InspectionResponse>;
   updateResponse: (fieldId: string, updates: Partial<InspectionResponse>) => void;
   depth?: number;
   parentPath?: string;
+  setResponses: React.Dispatch<React.SetStateAction<Record<string, InspectionResponse>>>;
 }) {
   // Generate unique key for this field (same logic as initializeFieldResponses)
   const fieldKey = field.id 
@@ -362,6 +365,8 @@ function MultiTypeFieldRenderer({
                 field={typeSpecificField}
                 response={response}
                 onUpdate={(updates) => updateResponse(responseKey, updates)}
+                responses={responses}
+                setResponses={setResponses}
               />
             </div>
           );
@@ -387,6 +392,7 @@ function MultiTypeFieldRenderer({
                 updateResponse={updateResponse}
                 depth={depth + 1}
                 parentPath={newParentPath}
+                setResponses={setResponses}
               />
             );
           })}
@@ -399,11 +405,15 @@ function MultiTypeFieldRenderer({
 function FieldRenderer({
   field,
   response,
-  onUpdate
+  onUpdate,
+  responses,
+  setResponses
 }: {
   field: FormField;
   response: InspectionResponse;
   onUpdate: (updates: Partial<InspectionResponse>) => void;
+  responses: Record<string, InspectionResponse>;
+  setResponses: React.Dispatch<React.SetStateAction<Record<string, InspectionResponse>>>;
 }) {
   const [signatureRef, setSignatureRef] = useState<SignatureCanvas | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -659,6 +669,151 @@ function FieldRenderer({
                 />
               </div>
             )}
+          </div>
+        );
+
+      case FieldType.SUBFORM:
+        // Get subform instances from responses or initialize with minimum instances
+        const subformInstancesKey = `${field.id}_subform_instances`;
+        const existingInstances = responses[subformInstancesKey]?.response_value ? 
+          JSON.parse(responses[subformInstancesKey].response_value) : [];
+        
+        const minInstances = field.field_options?.min_instances || 0;
+        const maxInstances = field.field_options?.max_instances || 0; // 0 means unlimited
+        
+        // Initialize with minimum instances if none exist
+        const currentInstances = existingInstances.length >= minInstances ? 
+          existingInstances : 
+          Array.from({ length: minInstances }, (_, i) => ({ id: `instance_${i}`, data: {} }));
+
+        const updateSubformInstances = (newInstances: any[]) => {
+           setResponses(prev => ({
+             ...prev,
+             [subformInstancesKey]: {
+               field_id: field.id || null,
+               response_value: JSON.stringify(newInstances),
+               pass_hold_status: undefined,
+               measurement_value: undefined
+             }
+           }));
+         };
+
+        const addInstance = () => {
+          if (maxInstances === 0 || currentInstances.length < maxInstances) {
+            const newInstance = { 
+              id: `instance_${Date.now()}`, 
+              data: {} 
+            };
+            const newInstances = [...currentInstances, newInstance];
+            updateSubformInstances(newInstances);
+          }
+        };
+
+        const removeInstance = (instanceIndex: number) => {
+           if (currentInstances.length > minInstances) {
+             const newInstances = currentInstances.filter((_: any, index: number) => index !== instanceIndex);
+            updateSubformInstances(newInstances);
+            
+            // Clean up responses for removed instance
+            field.field_options?.subform_fields?.forEach((subField: any) => {
+              const subFieldKey = `${field.id}_instance_${instanceIndex}_${subField.field_name}`;
+              setResponses(prev => {
+                const newResponses = { ...prev };
+                delete newResponses[subFieldKey];
+                return newResponses;
+              });
+            });
+          }
+        };
+
+        return (
+          <div className="space-y-4">
+            <div className="bg-gray-50 border border-gray-200 rounded-md p-4">
+              <div className="flex justify-between items-center mb-3">
+                <h4 className="text-sm font-medium text-gray-900">
+                  {field.field_name} ({currentInstances.length} instance{currentInstances.length !== 1 ? 's' : ''})
+                </h4>
+                <div className="flex space-x-2">
+                  {(maxInstances === 0 || currentInstances.length < maxInstances) && (
+                    <button
+                      type="button"
+                      onClick={addInstance}
+                      className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                    >
+                      + Add Instance
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              {currentInstances.map((instance: any, instanceIndex: number) => (
+                <div key={instance.id} className="mb-4 p-4 bg-white border border-gray-200 rounded-lg">
+                  <div className="flex justify-between items-center mb-3">
+                    <h5 className="text-sm font-medium text-gray-800">
+                      Instance {instanceIndex + 1}
+                    </h5>
+                    {currentInstances.length > minInstances && (
+                      <button
+                        type="button"
+                        onClick={() => removeInstance(instanceIndex)}
+                        className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  
+                  {field.field_options?.subform_fields?.map((subField: any, subIndex: number) => {
+                    // Generate unique key for this subfield response in this instance
+                    const subFieldKey = `${field.id}_instance_${instanceIndex}_${subField.field_name}`;
+                    const subFieldResponse = responses[subFieldKey] || {
+                      field_id: null,
+                      conditional_field_name: subField.field_name,
+                      conditional_parent_field_id: field.id,
+                      response_value: '',
+                      pass_hold_status: undefined,
+                      measurement_value: undefined
+                    };
+
+                    return (
+                      <div key={subIndex} className="mb-3">
+                        <label className="block text-sm font-medium text-gray-900 mb-1">
+                          {subField.field_name}
+                          {subField.is_required && <span className="text-red-500 ml-1">*</span>}
+                        </label>
+                        <FieldRenderer
+                          field={{
+                            ...subField,
+                            id: null, // Subfields don't have IDs
+                            field_type: subField.field_type as FieldType,
+                            field_options: subField.field_options || subField.options ? {
+                              ...subField.field_options,
+                              options: subField.options || subField.field_options?.options
+                            } : undefined
+                          }}
+                          response={subFieldResponse}
+                          onUpdate={(updates) => {
+                            setResponses(prev => ({
+                              ...prev,
+                              [subFieldKey]: { ...subFieldResponse, ...updates }
+                            }));
+                          }}
+                          responses={responses}
+                          setResponses={setResponses}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+              
+              {minInstances > 0 && (
+                <p className="text-xs text-gray-500 mt-2">
+                  Minimum {minInstances} instance{minInstances !== 1 ? 's' : ''} required
+                  {maxInstances > 0 && `, maximum ${maxInstances} allowed`}
+                </p>
+              )}
+            </div>
           </div>
         );
 
