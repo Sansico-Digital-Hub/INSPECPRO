@@ -49,18 +49,21 @@ dev_origins = [
     "http://localhost:3002",
     "http://localhost:3001", 
     "http://127.0.0.1:3002",
+    "http://127.0.0.1:3001",
     "http://180.250.95.156:3002",
-    "http://127.0.0.1:3001"
+    "http://180.250.95.156:3001",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
 ]
 
-# Production origins - Replace with your actual domain
+# Production origins
 prod_origins = [
     "http://180.250.95.156:3002",
     "https://www.yourdomain.com",
     "https://inspecpro.yourdomain.com"
 ]
 
-# Use environment variable to determine allowed origins
+# Environment-based CORS configuration
 environment = os.getenv("ENVIRONMENT", "development")
 allowed_origins = prod_origins if environment == "production" else dev_origins
 
@@ -68,8 +71,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,  # No more wildcard "*" - Security Fix
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Specific methods instead of "*"
-    allow_headers=["Authorization", "Content-Type", "Accept"],  # Specific headers instead of "*"
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],  # Added PATCH method
+    allow_headers=["*"],  # Allow all headers for development
 )
 
 # Include routers
