@@ -5,10 +5,15 @@ const nextConfig = {
     optimizePackageImports: ['react-hot-toast'],
   },
   async rewrites() {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (!apiUrl) {
+      console.error('NEXT_PUBLIC_API_URL environment variable is not set');
+      return [];
+    }
     return [
       {
         source: '/api/:path*',
-        destination: 'http://localhost:8004/api/:path*',
+        destination: `${apiUrl}/api/:path*`,
       },
     ];
   },
