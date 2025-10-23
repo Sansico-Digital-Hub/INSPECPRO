@@ -44,28 +44,22 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS middleware - Environment-based configuration for security
-# Development origins
-dev_origins = [
-    "http://localhost:3002",
-    "http://localhost:3001", 
-    "http://127.0.0.1:3002",
-    "http://127.0.0.1:3001",
-    "http://180.250.95.156:3002",
-    "http://180.250.95.156:3001",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
-]
-
-# Production origins
-prod_origins = [
-    "http://180.250.95.156:3002",
-    "https://www.yourdomain.com",
-    "https://inspecpro.yourdomain.com"
-]
-
-# Environment-based CORS configuration
+# Get CORS origins from environment variables
 environment = os.getenv("ENVIRONMENT", "development")
-allowed_origins = prod_origins if environment == "production" else dev_origins
+
+if environment == "production":
+    cors_origins_str = os.getenv("CORS_PROD_ORIGINS")
+else:
+    cors_origins_str = os.getenv("CORS_DEV_ORIGINS")
+
+# Check if CORS origins are configured
+if not cors_origins_str:
+    logger.error(f"CORS origins not configured for environment: {environment}")
+    logger.error("Please set CORS_PROD_ORIGINS or CORS_DEV_ORIGINS in your .env file")
+    allowed_origins = []
+else:
+    # Convert comma-separated string to list and filter out empty strings
+    allowed_origins = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,

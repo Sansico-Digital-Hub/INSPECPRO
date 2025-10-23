@@ -200,8 +200,11 @@ class EmailService:
     def send_password_reset_email(self, to_email: str, reset_token: str, user_name: str = None) -> bool:
         """Send password reset email."""
         try:
-            # Create reset URL (you may need to adjust this based on your frontend URL)
-            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3002')
+            # Create reset URL - requires FRONTEND_URL environment variable
+            frontend_url = os.getenv('FRONTEND_URL')
+            if not frontend_url:
+                logger.error("FRONTEND_URL environment variable is not set")
+                return False
             reset_url = f"{frontend_url}/reset-password?token={reset_token}"
             
             subject = "Sanalyze - Password Reset Request"

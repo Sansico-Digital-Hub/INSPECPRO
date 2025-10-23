@@ -152,4 +152,36 @@ venv.bak/
 # mkdocs documentation
 /site
 
+# Next.js specific (frontend)
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.vercel
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
+
+# Frontend dependencies and cache
+frontend/node_modules/
+frontend/.pnp
+frontend/.pnp.js
+frontend/coverage/
+
+# Frontend environment files
+frontend/.env*.local
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project specific
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/logs/*
+!backend/logs/.gitkeep
+backend/*.db
+backend/inspecpro.db
+
 #
